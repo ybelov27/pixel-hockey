@@ -118,13 +118,14 @@ export class GameScene implements Scene {
       this.r.handle(e);
       if (e.t === 'hit') audio.sfx('check');
       if (e.t === 'deke') audio.sfx('deke');
-      if (e.t === 'crossbar') audio.sfx('crossbar');
+      if (e.t === 'crossbar') audio.sfx(e.value ? 'bardown' : 'crossbar');
       if (e.t === 'robbed') audio.sfx('ooh');
       if (e.t === 'goal') {
         // NHL tradition: the horn and goal song play only for the home team
+        const barDown = m.events.some((x) => x.t === 'crossbar' && x.value);
         if (e.side === 0) {
-          audio.sfx('horn');
-          audio.goalSong(hashString(m.teams[0].abbr + m.teams[0].name));
+          audio.goalHorn(barDown ? 0.45 : 0);
+          audio.goalSong(hashString(m.teams[0].abbr + m.teams[0].name), barDown ? 3 : 2.6);
         } else audio.sfx('groan');
       }
     }

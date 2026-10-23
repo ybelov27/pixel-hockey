@@ -208,6 +208,8 @@ export interface Shootout {
   winner: Side | -1;
 }
 
+/** Share of goals that go in off the crossbar, and of crossbar clips that drop in. */
+export const BAR_DOWN_CHANCE = 0.8;
 const PUCK_FRICTION = 0.55;
 const GRAV = 420;
 
@@ -1162,17 +1164,21 @@ export class Match {
       const t = (px - gl) / (px - pk.x || 1);
       const yC = py + (pk.y - py) * t;
       const inside = Math.abs(yC - CY) < GOAL_HW - 0.5;
-      if (inside && pk.z < GOAL_H) {
+      const clipsBar = inside && pk.z >= GOAL_H && pk.z < GOAL_H + 2;
+      if (inside && (pk.z < GOAL_H || (clipsBar && rng.next() < BAR_DOWN_CHANCE))) {
         const scorer: Side = this.goalX(0) === gl ? 1 : 0;
-        const barDown = pk.z >= GOAL_H - 2;
+        // most goals ring in off the crossbar: the signature "bar down" finish
+        const barDown = pk.z >= GOAL_H - 2 || rng.next() < BAR_DOWN_CHANCE;
         this.pendingTag = barDown ? 'BAR DOWN' : this.time - this.lastPost < 0.25 ? 'POST AND IN' : '';
         if (barDown) {
+          pk.z = GOAL_H - 1.5;
+          pk.vz = -80;
           this.emit('crossbar', gl, CY, scorer, 1);
         }
         this.onGoal(scorer);
         return true;
       }
-      if (inside && pk.z < GOAL_H + 2) {
+      if (clipsBar) {
         // off the crossbar and out ("bar out")
         pk.x = gl + rs * 1.5;
         pk.vx = -pk.vx * 0.45;

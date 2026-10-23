@@ -139,8 +139,7 @@ class Audio {
         this.tone(160, 0.12, 'sawtooth', 0.2, 60);
         break;
       case 'post':
-        this.tone(1760, 0.35, 'square', 0.12, 1700);
-        this.tone(2640, 0.25, 'triangle', 0.1);
+        this.metalRing(0.82, 0.85);
         break;
       case 'board':
         this.noise(0.12, 0.25 * power, 'lowpass', 400);
@@ -170,9 +169,14 @@ class Audio {
         this.cheer(1, 0.12);
         break;
       case 'crossbar':
-        this.tone(2093, 0.5, 'square', 0.12, 2050);
-        this.tone(3136, 0.35, 'triangle', 0.12);
-        this.tone(1568, 0.6, 'sine', 0.1);
+        this.metalRing(1, 1);
+        break;
+      case 'bardown':
+        this.metalRing(1, 1.15);
+        // puck snaps the twine, then the building erupts
+        this.noise(0.28, 0.22, 'bandpass', 2600, 0.09, 0.9);
+        this.noise(0.12, 0.12, 'lowpass', 700, 0.1);
+        this.cheer(3, 0.26);
         break;
       case 'chant': {
         // organ "let's go ___" then clap clap clap-clap-clap
@@ -208,11 +212,54 @@ class Audio {
     }
   }
 
-  /** Arena goal horn: long, detuned low brass chord with vibrato. */
-  private goalHorn() {
+  /**
+   * A struck steel pipe: sharp click plus inharmonic, slowly beating partials
+   * that ring out. pitch scales the frequencies, vol the loudness.
+   */
+  private metalRing(pitch: number, vol: number) {
     if (!this.ok()) return;
     const c = this.ctx!;
     const t = c.currentTime;
+    this.noise(0.025, 0.45 * vol, 'highpass', 4000);
+    this.noise(0.05, 0.2 * vol, 'bandpass', 1800, 0, 3);
+    const out = c.createGain();
+    out.gain.value = vol;
+    const hp = c.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 500;
+    out.connect(hp);
+    hp.connect(this.master!);
+    // ratios of a free-free bar's modes, giving the classic "ting" of hockey pipe
+    const partials: [number, number, number][] = [
+      [1, 0.2, 1.1],
+      [2.76, 0.13, 0.8],
+      [5.4, 0.07, 0.5],
+      [8.93, 0.035, 0.3],
+    ];
+    for (const [ratio, amp, decay] of partials) {
+      for (const det of [-2.5, 2.5]) {
+        const o = c.createOscillator();
+        const g = c.createGain();
+        o.type = 'sine';
+        const f = 1180 * pitch * ratio + det;
+        o.frequency.setValueAtTime(f * 1.012, t);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.06);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(amp, t + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+        o.connect(g);
+        g.connect(out);
+        o.start(t);
+        o.stop(t + decay + 0.05);
+      }
+    }
+  }
+
+  /** Arena goal horn: long, detuned low brass chord with vibrato. */
+  goalHorn(delay = 0) {
+    if (!this.ok()) return;
+    const c = this.ctx!;
+    const t = c.currentTime + delay;
     const out = c.createGain();
     out.gain.setValueAtTime(0.0001, t);
     out.gain.exponentialRampToValueAtTime(0.16, t + 0.08);
@@ -240,7 +287,7 @@ class Audio {
     }
     lfo.start(t);
     lfo.stop(t + 3.05);
-    this.cheer(4, 0.22);
+    if (!delay) this.cheer(4, 0.22);
   }
 
   /** A short chiptune goal song generated from the team name, so every club sounds different. */

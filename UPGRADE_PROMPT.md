@@ -58,6 +58,8 @@ Research notes: **"bar down"** is slang for a goal where the puck hits the cross
    - A puck that crosses the goal line between the posts at crossbar height (within about 2 px below the bar) is a **BAR DOWN** goal: it plays a crossbar PING, shows a "BAR DOWN!" banner and appears on the jumbotron.
    - A puck just above the bar is a **CROSSBAR** hit: it pings and deflects back out with a "CROSSBAR!" pop.
    - A goal scored within 0.25 s of a post hit is **POST AND IN**.
+   - **Bar-down rate (player request):** 80% of goals go in bar down, and a puck that clips the crossbar drops in 80% of the time. It is set by `BAR_DOWN_CHANCE` in `src/game/match.ts`.
+   - **Bar-down sound:** a struck-steel "ting" built from a sharp click plus inharmonic, slightly beating partials at the vibration ratios of a metal bar (1 : 2.76 : 5.4 : 8.93), then the snap of the net and the crowd erupting. The goal horn comes in a beat later so the ting is heard first.
 2. **Goal tags** appear in the goal banner and the scoring log: BAR DOWN, POST AND IN, TOP SHELF, FIVE HOLE, ONE-TIMER, REBOUND, BREAKAWAY, SLAPSHOT, POWER PLAY GOAL, SHORTY.
 3. **Shot speed.** Hard slap shots show a broadcast-style speed pop, e.g. "98 MPH".
 4. **Goal horn and goal song.** These follow NHL arena tradition:

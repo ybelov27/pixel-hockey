@@ -3,6 +3,7 @@ import { TEAMS } from '../src/data/teams';
 import { Match } from '../src/game/match';
 import { CY, GOAL_H, GOAL_LINE } from '../src/game/rink';
 import { DEFAULT_SETTINGS, migrateSettings } from '../src/core/storage';
+import { rng } from '../src/core/rng';
 
 function shotAtLeftNet(z: number) {
   const m = new Match({
@@ -30,16 +31,36 @@ describe('crossbar moments', () => {
     expect(m.goals[0].tag).toContain('BAR DOWN');
   });
 
-  it('rings it off the crossbar and out when the puck is just high', () => {
-    const m = shotAtLeftNet(GOAL_H + 1);
-    expect(m.score[1]).toBe(0);
-    expect(m.puck.vx).toBeGreaterThan(0);
+  it('rings it off the crossbar and out when the puck is just high and the roll misses', () => {
+    const orig = rng.next.bind(rng);
+    rng.next = () => 0.99;
+    try {
+      const m = shotAtLeftNet(GOAL_H + 1);
+      expect(m.score[1]).toBe(0);
+      expect(m.puck.vx).toBeGreaterThan(0);
+    } finally {
+      rng.next = orig;
+    }
   });
 
-  it('scores an ordinary low goal without the bar-down tag', () => {
-    const m = shotAtLeftNet(2);
-    expect(m.score[1]).toBe(1);
-    expect(m.goals[0].tag).not.toContain('BAR DOWN');
+  it('scores an ordinary low goal without the bar-down tag when the roll misses', () => {
+    const orig = rng.next.bind(rng);
+    rng.next = () => 0.99;
+    try {
+      const m = shotAtLeftNet(2);
+      expect(m.score[1]).toBe(1);
+      expect(m.goals[0].tag).not.toContain('BAR DOWN');
+    } finally {
+      rng.next = orig;
+    }
+  });
+
+  it('turns about 80% of goals into bar downs', () => {
+    let bar = 0;
+    const n = 200;
+    for (let i = 0; i < n; i++) if (shotAtLeftNet(2).goals[0]?.tag.includes('BAR DOWN')) bar++;
+    expect(bar / n).toBeGreaterThan(0.7);
+    expect(bar / n).toBeLessThan(0.9);
   });
 });
 
