@@ -58,9 +58,52 @@ class Audio {
         s.start(0);
       }
       if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (!this.samplesRequested) {
+        this.samplesRequested = true;
+        for (const name of ['bardown', 'post']) void this.loadSample(name);
+      }
     } catch {
       /* no audio */
     }
+  }
+
+  /**
+   * Optional real recordings. Drop sounds/bardown.mp3 (and optionally
+   * sounds/post.mp3) into public/ and they replace the synthesized crossbar
+   * and post sounds; without them the synth versions play.
+   */
+  private samples = new Map<string, AudioBuffer>();
+  private samplesRequested = false;
+
+  private async loadSample(name: string) {
+    for (const ext of ['mp3', 'm4a', 'wav']) {
+      try {
+        const res = await fetch(`./sounds/${name}.${ext}`);
+        const type = res.headers.get('content-type') || '';
+        if (!res.ok || type.includes('text/html')) continue;
+        const buf = await res.arrayBuffer();
+        const audio = await new Promise<AudioBuffer>((resolve, reject) => this.ctx!.decodeAudioData(buf, resolve, reject));
+        this.samples.set(name, audio);
+        return;
+      } catch {
+        /* missing or undecodable: keep trying, then fall back to synth */
+      }
+    }
+  }
+
+  private playSample(name: string, vol = 1, rate = 1) {
+    const buf = this.samples.get(name);
+    if (!buf || !this.ok()) return false;
+    const c = this.ctx!;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = c.createGain();
+    g.gain.value = vol;
+    src.connect(g);
+    g.connect(this.master!);
+    src.start();
+    return true;
   }
 
   suspend() {
@@ -139,7 +182,7 @@ class Audio {
         this.tone(160, 0.12, 'sawtooth', 0.2, 60);
         break;
       case 'post':
-        this.metalRing(0.82, 0.85);
+        if (!this.playSample('post', 0.8, 0.92) && !this.playSample('bardown', 0.7, 0.85)) this.metalRing(0.82, 0.85);
         break;
       case 'board':
         this.noise(0.12, 0.25 * power, 'lowpass', 400);
@@ -169,10 +212,10 @@ class Audio {
         this.cheer(1, 0.12);
         break;
       case 'crossbar':
-        this.metalRing(1, 1);
+        if (!this.playSample('post', 0.9) && !this.playSample('bardown', 0.8)) this.metalRing(1, 1);
         break;
       case 'bardown':
-        this.metalRing(1, 1.15);
+        if (!this.playSample('bardown', 1)) this.metalRing(1, 1.15);
         // puck snaps the twine, then the building erupts
         this.noise(0.28, 0.22, 'bandpass', 2600, 0.09, 0.9);
         this.noise(0.12, 0.12, 'lowpass', 700, 0.1);

@@ -43,6 +43,10 @@ Hold the device in landscape. In portrait the game asks you to rotate.
 - **Sound:** the goal horn and a goal song made from each team's name play for home goals only, as in NHL arenas. Away goals get a crowd groan. The home crowd also does "LET'S GO" organ-and-clap chants.
 - **Presentation:** procedural chiptune music and sound effects. There are no image or audio assets besides the app icons.
 
+## Using a real bar-down recording
+
+The crossbar "ting" is synthesized by default. To use a real recording, add an audio file at **`public/sounds/bardown.mp3`** (`.m4a` and `.wav` also work). It plays for bar-down goals and crossbar hits. You can also add **`public/sounds/post.mp3`** for post hits; without it the bar-down file plays at a slightly lower pitch. Short clips (about 1-2 s, trimmed so the ping starts immediately) sound best. The easiest way to add one is on GitHub: open the repo, go to `public/sounds`, choose **Add file > Upload files**, then commit. The deploy workflow republishes the game automatically. Use a recording whose license allows it in a public project (CC0, or one with any required credit added below).
+
 ## Development
 
 ```bash
