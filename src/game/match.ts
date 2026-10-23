@@ -495,8 +495,8 @@ export class Match {
     this.refT = 0;
     const cpu = this.human === 0 ? 1 : 0;
     const aiC = this.skaters[cpu][0];
-    const diffMod = [0.14, 0.06, 0.0, -0.04][this.cfg.difficulty] ?? 0;
-    this.foAi = 0.2 + (75 - aiC.p.fo) * 0.004 + diffMod + rng.next() * 0.12 + (this.cfg.assist ? 0.12 : 0);
+    const diffMod = [0.08, 0.03, 0.0, -0.04][this.cfg.difficulty] ?? 0;
+    this.foAi = 0.2 + (75 - aiC.p.fo) * 0.004 + diffMod + rng.next() * 0.12 + (this.cfg.assist ? 0.02 : 0);
     if (this.human >= 0) this.ctrl = this.skaters[this.human as Side].find((k) => k.role === 'C' && k.onIce) || this.onIce(this.human as Side)[0] || null;
   }
 
@@ -686,7 +686,7 @@ export class Match {
 
   /** Seconds of wind-up for a full-power slap shot. */
   get chargeFull() {
-    return this.cfg.assist ? 0.5 : 0.9;
+    return this.cfg.assist ? 0.85 : 1.05;
   }
 
   /** True when assists apply to this skater (the human's team). */
@@ -869,8 +869,10 @@ export class Match {
       const d = Math.hypot(dx, dy);
       const facing = (dx * fx + dy * fy) / (d || 1);
       if (d < 19 && facing > 0.1) {
-        let chance = carrier.deke > 0 ? 0 : 0.5 + (c.p.def - carrier.p.hnd) * 0.012;
-        if (this.assisted(carrier)) chance *= 0.6;
+        let chance = carrier.deke > 0 ? 0 : (c === this.ctrl ? 0.32 : 0.5) + (c.p.def - carrier.p.hnd) * 0.012;
+        // winding up a slap shot leaves the puck exposed
+        if (carrier.charge > 0.1) chance = Math.min(0.9, chance * 1.6);
+        else if (this.assisted(carrier)) chance *= 0.75;
         if (rng.next() < chance) {
           pk.owner = null;
           carrier.pickupCD = 0.45;
@@ -924,7 +926,7 @@ export class Match {
     if (st < 25) maxS *= 0.85;
     if (has) maxS *= 0.94;
     if (k.slow > 0) maxS *= 0.6;
-    if (k.charge > 0.15) maxS *= 0.45;
+    if (k.charge > 0.15) maxS *= 0.3;
     if (k.deke > 0) maxS *= 1.25;
     const mag = Math.hypot(it.mx, it.my);
     let acc = mag > 0.05 ? 230 + k.p.spd * 1.2 : 110;
@@ -1000,6 +1002,8 @@ export class Match {
         if (a.side !== b.side) {
           if (a.lunge > 0 && !a.hitDone) this.resolveCheck(a, b);
           else if (b.lunge > 0 && !b.hitDone) this.resolveCheck(b, a);
+          this.contactStrip(a, b);
+          this.contactStrip(b, a);
         }
         const nx = dx / d;
         const ny = dy / d;
@@ -1029,6 +1033,25 @@ export class Match {
     }
   }
 
+  /** A defender in body contact with the puck carrier can strip the puck off his stick. */
+  private contactStrip(def: Skater, car: Skater) {
+    const pk = this.puck;
+    if (pk.owner !== car || def.down > 0 || car.deke > 0 || this.state !== 'play') return;
+    const lvl = this.human < 0 ? 2 : def.side === this.human ? 1 : this.cfg.difficulty;
+    let rate = def === this.ctrl ? 1.2 : [1.2, 1.6, 2.0, 2.5][lvl];
+    if (car.charge > 0.1) rate *= 2;
+    else if (this.assisted(car)) rate *= 0.8;
+    if (rng.next() >= rate / 60) return;
+    pk.owner = null;
+    car.pickupCD = 0.4;
+    pk.vx = Math.cos(def.face) * 80 + car.vx * 0.3;
+    pk.vy = Math.sin(def.face) * 80 + car.vy * 0.3;
+    pk.lastSide = def.side;
+    pk.ice = null;
+    car.charge = -1;
+    events.stick = true;
+  }
+
   private resolveCheck(a: Skater, b: Skater) {
     a.hitDone = true;
     if (b.deke > 0 || b.down > 0) {
@@ -1038,7 +1061,8 @@ export class Match {
     const power = (Math.hypot(a.vx, a.vy) / 120) * (a.p.chk / 80);
     const resist = (b.p.hnd * 0.4 + b.p.chk * 0.3 + 30) / 100;
     let chance = clamp(0.6 + (power - resist) * 0.8, 0.15, 0.95);
-    if (this.assisted(b) && this.puck.owner === b) chance *= 0.6;
+    if (b.charge > 0.1) chance = Math.min(0.95, chance * 1.4);
+    else if (this.assisted(b) && this.puck.owner === b) chance *= 0.75;
     if (rng.next() < chance) {
       b.down = 0.9 + rng.next() * 0.6;
       b.vx += a.vx * 0.6;
@@ -1303,7 +1327,7 @@ export class Match {
     let base = 0.915 + (g.p.goa - 80) * 0.007;
     const diff = this.cfg.difficulty;
     if (this.human >= 0) {
-      if (shot.side === this.human) base += [-0.1, -0.03, 0.02, 0.05][diff];
+      if (shot.side === this.human) base += [-0.02, 0.03, 0.05, 0.08][diff];
       else base += [0.08, 0.03, 0, -0.02][diff];
     }
     const gx = this.goalX(g.side);

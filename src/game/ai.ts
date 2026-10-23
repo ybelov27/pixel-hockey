@@ -5,7 +5,7 @@ import { BLUE_LINE, CY, GOAL_HW, RINK_L, RINK_W, constrainToRink } from './rink'
 
 // Per difficulty: decision delay, aggressiveness, randomness.
 const REACT = [0.42, 0.3, 0.2, 0.13];
-const AGGR = [0.5, 1.0, 1.5, 2.0];
+const AGGR = [0.9, 1.3, 1.7, 2.2];
 const NOISE = [0.35, 0.22, 0.12, 0.06];
 const ZONE = RINK_L - BLUE_LINE; // attacking blue line in the attack frame (375)
 
@@ -165,22 +165,40 @@ function defend(m: Match, s: Skater, dt: number) {
   const ctrl = m.ctrl;
   const humanPressing = !!ctrl && ctrl.side === side && Math.hypot(ctrl.x - c.x, ctrl.y - c.y) < 40;
   const gx = m.goalX(side);
+  // how deep the carrier is in our end (0 = our goal line side, 600 = far end)
+  const depth = m.ax(side, c.x);
+  const inOurZone = depth < BLUE_LINE + 30;
+  const windingUp = c.charge > 0.1;
   if (rank === 0 && !humanPressing) {
+    // gap up: stay between the carrier and our net, and close fast
     const dx = gx - c.x;
     const dy = CY - c.y;
     const d = Math.hypot(dx, dy) || 1;
-    s.tx = c.x + (dx / d) * 8 + c.vx * 0.15;
-    s.ty = c.y + (dy / d) * 8 + c.vy * 0.15;
+    s.tx = c.x + (dx / d) * 10 + c.vx * 0.25;
+    s.ty = c.y + (dy / d) * 10 + c.vy * 0.25;
     const dist = Math.hypot(s.x - c.x, s.y - c.y);
-    const aggr = AGGR[level(m, s)];
-    if (dist < 20) {
+    const aggr = AGGR[level(m, s)] * (windingUp ? 2.5 : 1);
+    steer(s);
+    s.intent.sprint = s.p.stamina > 15;
+    if (dist < 22) {
       s.face = Math.atan2(c.y - s.y, c.x - s.x);
-      if (rng.next() < aggr * dt * 1.6) m.doPoke(s);
-      else if (dist < 16 && Math.hypot(s.vx, s.vy) > 40 && rng.next() < aggr * dt * 0.5) m.doCheck(s);
+      if (rng.next() < aggr * dt * 2.2) m.doPoke(s);
+      else if (dist < 18 && Math.hypot(s.vx, s.vy) > 35 && rng.next() < aggr * dt * 0.8) m.doCheck(s);
     }
-  } else if (rank === 1 || (rank === 0 && humanPressing)) {
-    s.tx = gx + (c.x - gx) * 0.4;
-    s.ty = CY + (c.y - CY) * 0.4;
+    return;
+  } else if ((rank === 1 && inOurZone) || (rank === 0 && humanPressing)) {
+    // second man collapses into the shooting lane
+    s.tx = c.x + (gx - c.x) * 0.35;
+    s.ty = c.y + (CY - c.y) * 0.35;
+    const dist = Math.hypot(s.x - c.x, s.y - c.y);
+    if (windingUp && dist < 22 && rng.next() < AGGR[level(m, s)] * dt * 2) {
+      s.face = Math.atan2(c.y - s.y, c.x - s.x);
+      m.doPoke(s);
+    }
+  } else if (rank <= 2) {
+    // cover the slot in front of our goalie
+    s.tx = gx + (c.x - gx) * 0.3;
+    s.ty = CY + (c.y - CY) * 0.3;
   } else zone(m, s);
 }
 
