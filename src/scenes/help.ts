@@ -24,8 +24,8 @@ const PAGES: { title: string; lines: string[] }[] = [
     title: 'KEYBOARD / GAMEPAD',
     lines: [
       'MOVE: ARROWS OR WASD   SPRINT: SHIFT',
-      'PASS / SWITCH: SPACE, J OR Z  (PAD A)',
-      'SHOOT / CHECK: K OR X  (PAD X/B)',
+      'PASS: TAP SPACE   SHOOT: HOLD SPACE OR K',
+      'SWITCH: SPACE (J/Z, PAD A)  CHECK: K OR X',
       'DEKE / POKE: L OR C  (PAD Y)',
       'PAUSE: ESC OR P  (PAD START)',
       '',

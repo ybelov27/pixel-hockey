@@ -1,6 +1,6 @@
 import { HALF_POWER, type Match, type MatchEvent, type Side, type SkSnap, type Snap } from '../game/match';
 import {
-  CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W, WORLD_PX_H, WORLD_PX_W, YS, projX, projY,
+  CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W, WORLD_PX_H, WORLD_PX_W, YS, projX, projY, rinkYRange,
 } from '../game/rink';
 import { buildArena, type ArenaArt } from './arena';
 import { G_AX, G_AY, REF_KIT, SK_AX, SK_AY, goalieSprite, kitFor, skaterSprite, type Kit, type View } from './sprites';
@@ -58,6 +58,11 @@ export class GameRenderer {
   private pops: Pop[] = [];
   private crowdT = 0;
   private crowdFrame = 0;
+  private waveX = -999;
+  private waveCD = 12;
+  private standT = 0;
+  private flexes: { x: number; y: number; t: number; amp: number }[] = [];
+  private broken: { x: number; top: boolean } | null = null;
   private hype = 0;
   private netRipple: [number, number] = [0, 0];
   private first = true;
@@ -124,7 +129,27 @@ export class GameRenderer {
         break;
       case 'shot':
         this.flashRate = Math.max(this.flashRate, 4);
+        this.standT = Math.max(this.standT, 0.9);
         break;
+      case 'flex':
+        this.flexes.push({ x: e.x, y: e.y, t: 0, amp: 2 + (e.value ?? 0.5) * 3 });
+        if (this.flexes.length > 6) this.flexes.shift();
+        break;
+      case 'glass': {
+        const top = e.y < CY;
+        const [yt, yb] = rinkYRange(Math.max(0, Math.min(RINK_L, e.x)));
+        const gy = top ? projY(yt) - 19 : projY(yb) - 8;
+        for (let i = 0; i < 70; i++) {
+          this.part(x + rng.gauss() * 6, gy + rng.gauss() * 4, rng.gauss() * 60, (top ? -1 : 1) * rng.next() * 50 - 20, 0.8 + rng.next() * 0.6, rng.pick(['#e0f4ff', '#bfe3ff', '#ffffff', '#9fd0ff']), rng.chance(0.3) ? 2 : 1, 200);
+        }
+        this.broken = { x: e.x, top };
+        this.flexes.push({ x: e.x, y: e.y, t: 0, amp: 6 });
+        this.pops.push({ x, y: gy - 10, text: 'SMASH!', color: '#bfe3ff', life: 1 });
+        this.standT = 2;
+        this.flashRate = 10;
+        if (settings.shake) this.shake = 6;
+        break;
+      }
       case 'crossbar':
         for (let i = 0; i < 12; i++) this.part(x, y - 14, rng.gauss() * 60, rng.gauss() * 40 - 30, 0.35, i % 2 ? '#ffd23f' : '#ffffff', 1, 120);
         if (e.value) this.showJumbo('BAR DOWN!', '#ffd23f', 3);
@@ -140,12 +165,13 @@ export class GameRenderer {
         break;
       case 'punch':
         this.punchFx = { side: e.side ?? 0, kind: e.value ?? 1, t: 0.3 };
-        if ((e.value ?? 0) > 0 && settings.shake) this.shake = Math.max(this.shake, e.value === 2 ? 4 : 2);
+        if ((e.value ?? 0) > 0 && e.value !== 5 && settings.shake) this.shake = Math.max(this.shake, (e.value ?? 1) >= 2 ? 4 : 2);
         this.hype = Math.max(this.hype, 1);
         break;
       case 'fightEnd':
         this.hype = 3;
         this.flashRate = 8;
+        this.koFlash = 0.8;
         break;
       case 'hattrick': {
         this.showJumbo('HAT TRICK!', '#ffd23f', 4);
@@ -227,6 +253,7 @@ export class GameRenderer {
       this.punchFx.t -= dt;
       if (this.punchFx.t <= 0) this.punchFx = null;
     }
+    this.koFlash = Math.max(0, this.koFlash - dt * 2.5);
     if (this.m.state === 'fight' && this.lastState !== 'fight') this.hype = 4;
     this.lamp[0] = Math.max(0, this.lamp[0] - dt);
     this.lamp[1] = Math.max(0, this.lamp[1] - dt);
@@ -235,7 +262,21 @@ export class GameRenderer {
       if (this.jumbo.t <= 0) this.jumbo = null;
     }
     const st = this.m.state;
-    if (st === 'faceoff' && this.lastState !== 'faceoff') this.thrown = [];
+    if (st === 'faceoff' && this.lastState !== 'faceoff') {
+      this.thrown = [];
+      this.broken = null;
+    }
+    for (const f of this.flexes) f.t += dt;
+    this.flexes = this.flexes.filter((f) => f.t < 0.7);
+    this.standT = Math.max(0, this.standT - dt);
+    // the wave rolls round the bowl every so often
+    if (this.waveX > -999) {
+      this.waveX += 170 * dt;
+      if (this.waveX > WORLD_PX_W + 80) this.waveX = -999;
+    } else if ((this.waveCD -= dt) <= 0) {
+      this.waveX = -80;
+      this.waveCD = 25 + rng.next() * 25;
+    }
     if (st === 'periodEnd' && this.lastState !== 'periodEnd') this.zam = { x: Math.max(-40, this.camX - projX(0) - 30), lane: 0, trail: Math.max(-40, this.camX - projX(0) - 30) };
     this.lastState = st;
     for (const o of this.thrown) {
@@ -281,7 +322,7 @@ export class GameRenderer {
     const oy = Math.round(this.camY) + sy;
     ctx.fillStyle = '#0c0e1c';
     ctx.fillRect(0, 0, W, H);
-    ctx.drawImage(this.arena.crowd[this.crowdFrame], -ox, -oy);
+    this.drawCrowd(ctx, ox, oy);
     if (this.hype > 0 && Math.floor(this.hype * 8) % 2 === 0) {
       ctx.fillStyle = 'rgba(255,255,255,0.06)';
       ctx.fillRect(0, 0, W, H);
@@ -297,6 +338,7 @@ export class GameRenderer {
     }
     this.drawJumbotron(ctx, ox, oy);
     ctx.drawImage(this.arena.rink, -ox, -oy);
+    this.drawFlex(ctx, ox, oy, true);
     this.drawResurfacer(ctx, ox, oy);
 
     // depth-sorted drawables
@@ -341,6 +383,7 @@ export class GameRenderer {
     for (const it of items) it.draw();
 
     ctx.drawImage(this.arena.near, -ox, -oy);
+    this.drawFlex(ctx, ox, oy, false);
     this.drawGoalLights(ctx, ox, oy);
     this.drawReticle(ctx, ox, oy);
 
@@ -522,6 +565,63 @@ export class GameRenderer {
     ctx.fillRect(px - 1, py - 1 - z, 1, 1);
   }
 
+  /** Crowd drawn in thin columns so fans bob individually, do the wave, and jump up. */
+  private drawCrowd(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
+    const { W, H } = display;
+    const t = performance.now() / 1000;
+    const COL = 6;
+    const [seated, bob, up] = this.arena.crowd;
+    for (let sx = -(((ox % COL) + COL) % COL); sx < W; sx += COL) {
+      const wx = sx + ox;
+      if (wx + COL <= 0 || wx >= WORLD_PX_W) continue;
+      const col = Math.floor(wx / COL);
+      const seed = ((col * 2654435761) >>> 0) / 4294967296;
+      let img = seated;
+      if (this.hype > 0) img = (Math.floor(t * 9) + col) & 1 ? up : bob;
+      else if (this.waveX > -999 && Math.abs(wx - this.waveX) < 26) img = up;
+      else if (this.waveX > -999 && Math.abs(wx - this.waveX) < 44) img = bob;
+      else if (this.standT > 0 && seed < 0.55) img = (Math.floor(t * 6) + col) & 1 ? up : bob;
+      else if (Math.floor(t * (1.4 + seed * 1.6) + seed * 7) % 3 === 0) img = bob;
+      ctx.drawImage(img, wx, oy, COL, H, sx, 0, COL, H);
+    }
+  }
+
+  /** Boards and glass bend for a moment when something slams into them. */
+  private drawFlex(ctx: CanvasRenderingContext2D, ox: number, oy: number, far: boolean) {
+    for (const f of this.flexes) {
+      if (far !== f.y < CY) continue;
+      for (let c = -22; c <= 22; c++) {
+        const wx = Math.round(f.x) + c;
+        if (wx < 1 || wx > RINK_L - 1) continue;
+        const prof = 1 - (c / 22) ** 2;
+        const off = Math.round(f.amp * prof * Math.sin(f.t * 40) * Math.exp(-f.t * 5));
+        if (!off) continue;
+        const [yt, yb] = rinkYRange(wx + 0.5);
+        const dx = projX(wx) - ox;
+        if (far) {
+          const top = Math.round(projY(yt)) - 27;
+          ctx.drawImage(this.arena.rink, projX(wx), top, 1, 27, dx, top - oy - off, 1, 27 + Math.max(0, off));
+        } else {
+          const top = Math.round(projY(yb)) - 13;
+          ctx.drawImage(this.arena.near, projX(wx), top, 1, 18, dx, top - oy + Math.min(0, off), 1, 18 + Math.abs(off));
+        }
+      }
+    }
+    // a shattered pane stays open until play resumes
+    const b = this.broken;
+    if (b && far === b.top) {
+      const [yt, yb] = rinkYRange(Math.max(0, Math.min(RINK_L, b.x)));
+      const px = Math.round(projX(b.x) - ox);
+      const py = Math.round((b.top ? projY(yt) - 26 : projY(yb) - 13) - oy);
+      ctx.fillStyle = 'rgba(12,14,32,0.65)';
+      ctx.fillRect(px - 9, py, 18, b.top ? 15 : 10);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      this.line(ctx, px - 9, py, px - 2, py + 6, 'rgba(255,255,255,0.8)');
+      this.line(ctx, px + 9, py + 2, px + 1, py + 7, 'rgba(255,255,255,0.8)');
+      this.line(ctx, px - 6, py + 12, px, py + 5, 'rgba(255,255,255,0.7)');
+    }
+  }
+
   /** Faint mirror image of a sprite on the glossy ice. */
   private reflect(ctx: CanvasRenderingContext2D, sprite: HTMLCanvasElement, px: number, py: number, ax: number, ay: number) {
     ctx.save();
@@ -681,92 +781,153 @@ export class GameRenderer {
     ctx.fillRect(px + 6, py - 1, 4, 2);
   }
 
-  /** Close-up fight: two big fighters, punches, health bars. */
+  /** Close-up fight: footwork, punches, ducks, health and stamina, gloves and helmets on the ice. */
   fightOverlay(ctx: CanvasRenderingContext2D) {
     const m = this.m;
     const fi = m.fight;
     if (m.state !== 'fight' || !fi) return;
     const { W, H, safe } = display;
-    ctx.fillStyle = 'rgba(8,10,24,0.6)';
+    ctx.fillStyle = 'rgba(8,10,24,0.62)';
     ctx.fillRect(0, 0, W, H);
     const cx = Math.round(W / 2);
     const floor = Math.round(H * 0.72);
-    // spotlight on the ice
-    ctx.fillStyle = 'rgba(238,245,252,0.85)';
+    ctx.fillStyle = 'rgba(238,245,252,0.88)';
     ctx.beginPath();
-    ctx.ellipse(cx, floor, 95, 16, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, floor, 120, 18, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgba(160,190,220,0.5)';
+    for (let i = 0; i < 6; i++) ctx.fillRect(cx - 100 + i * 37, floor - 6 + (i % 3) * 4, 14, 1);
+    // dropped gloves and sticks
+    for (const side of [0, 1] as Side[]) {
+      const kit = this.kits[side];
+      const gx = cx + (side === 0 ? -86 : 70);
+      ctx.fillStyle = '#12121c';
+      ctx.fillRect(gx - 1, floor + 3, 9, 6);
+      ctx.fillRect(gx + 9, floor + 6, 9, 6);
+      ctx.fillStyle = kit.glove === kit.jersey ? '#e2e2e8' : kit.glove;
+      ctx.fillRect(gx, floor + 4, 7, 4);
+      ctx.fillRect(gx + 10, floor + 7, 7, 4);
+      this.line(ctx, gx - 6, floor + 12, gx + 22, floor + 9, '#d7b377');
+    }
     const S = 3;
     for (const side of [0, 1] as Side[]) {
       const f = fi.f[side];
       const dirX = side === 0 ? 1 : -1;
       const kit = this.kits[side];
       let off = 0;
-      if (f.act === 'punch') off = Math.min(1, f.t / 0.12) * 8;
-      else if (f.act === 'upper') off = Math.min(1, f.t / 0.32) * 10;
-      else if (f.act === 'hit') off = -6 + f.t * 20;
+      if (f.act === 'punch') off = Math.min(1, f.t / PUNCH_HIT_T) * 8;
+      else if (f.act === 'upper') off = Math.min(1, f.t / UPPER_HIT_T) * 10;
+      else if (f.act === 'hit') off = -4 + f.t * 12;
       else if (f.act === 'block') off = -2;
-      const bob = f.act === 'idle' ? Math.round(Math.sin(fi.t * 6 + side) * 1) : 0;
-      const baseX = cx - dirX * 34 + dirX * off;
+      const bob = f.act === 'idle' ? Math.round(Math.sin(fi.t * 7 + side * 2) * 1.5) : 0;
+      const sway = f.act === 'idle' ? Math.round(Math.sin(fi.t * 3.3 + side) * 2) : 0;
+      const baseX = cx + f.x + dirX * off + sway;
+      const ducking = f.act === 'duck';
       const pose = f.act === 'down' ? 'down' : 'skate';
-      const spr = skaterSprite(kit, 'side', side === 1, f.act === 'idle' ? 1 : 0, pose, f.num);
+      const spr = skaterSprite(kit, 'side', side === 1, f.act === 'idle' ? Math.floor(fi.t * 4 + side) % 2 : 0, pose, f.num);
+      const sw = spr.width * S;
+      const sh = Math.round(spr.height * S * (ducking ? 0.72 : 1));
       const sx = Math.round(baseX - SK_AX * S);
-      const sy = Math.round(floor - SK_AY * S + bob);
-      ctx.drawImage(spr, sx, sy, spr.width * S, spr.height * S);
-      if (f.act === 'hit' && f.t < 0.1) {
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillRect(sx + 8, sy, spr.width * S - 16, spr.height * S - 10);
+      const sy = Math.round(floor - SK_AY * S * (ducking ? 0.72 : 1) + bob);
+      ctx.fillStyle = 'rgba(10,20,40,0.3)';
+      ctx.fillRect(Math.round(baseX - 16), floor - 1, 32, 4);
+      ctx.drawImage(spr, sx, sy, sw, sh);
+      // helmet knocked off: show hair, and the helmet lies on the ice
+      if (!f.helmet && f.act !== 'down') {
+        ctx.fillStyle = '#5a3a1e';
+        ctx.fillRect(sx + (side === 0 ? 18 : 15), sy + 3, 15, 7);
+        ctx.fillStyle = kit.helmet;
+        ctx.fillRect(cx + f.x - dirX * 30 - 7, floor + 2, 14, 7);
+        ctx.fillStyle = '#12121c';
+        ctx.fillRect(cx + f.x - dirX * 30 - 7, floor + 8, 14, 1);
       }
-      // arms: jab straight out, uppercut rising, or gloves up to block
+      if (f.act === 'hit' && f.t < 0.1) {
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fillRect(sx + 8, sy, sw - 16, sh - 10);
+      }
+      if (f.act === 'hit' && f.t < 0.25) {
+        // little stars around the head
+        for (let i = 0; i < 3; i++) {
+          const a = fi.t * 9 + i * 2.1;
+          ctx.fillStyle = '#ffd23f';
+          ctx.fillRect(Math.round(baseX + Math.cos(a) * 12), Math.round(sy - 2 + Math.sin(a) * 4), 2, 2);
+        }
+      }
       const shoulderX = Math.round(baseX + dirX * 6);
-      const shoulderY = Math.round(floor - 40 + bob);
+      const shoulderY = Math.round(floor - (ducking ? 28 : 40) + bob);
       if (f.act === 'punch' || f.act === 'upper') {
         const reach = f.act === 'punch' ? Math.min(1, f.t / PUNCH_HIT_T) : Math.min(1, f.t / UPPER_HIT_T);
-        const len = Math.round(6 + reach * 20);
-        const rise = f.act === 'upper' ? Math.round(reach * 16) : 0;
+        const len = Math.round(6 + reach * 22);
+        const rise = f.act === 'upper' ? Math.round(reach * 18) : 0;
         ctx.fillStyle = kit.jersey;
         ctx.fillRect(dirX > 0 ? shoulderX : shoulderX - len, shoulderY - rise, len, 5);
         ctx.fillStyle = '#12121c';
         ctx.fillRect((dirX > 0 ? shoulderX + len : shoulderX - len - 7) - 1, shoulderY - rise - 2, 9, 9);
-        ctx.fillStyle = kit.glove === kit.jersey ? '#e2e2e8' : kit.glove;
+        ctx.fillStyle = '#f1c39a';
         ctx.fillRect(dirX > 0 ? shoulderX + len : shoulderX - len - 7, shoulderY - rise - 1, 7, 7);
       } else if (f.act === 'block') {
         ctx.fillStyle = '#12121c';
         ctx.fillRect(shoulderX + dirX * 4 - 5, shoulderY - 16, 10, 14);
-        ctx.fillStyle = '#e2e2e8';
+        ctx.fillStyle = '#f1c39a';
         ctx.fillRect(shoulderX + dirX * 4 - 4, shoulderY - 15, 8, 12);
+      } else if (f.act !== 'down') {
+        // bare fists up in a guard
+        ctx.fillStyle = '#12121c';
+        ctx.fillRect(shoulderX + dirX * 8 - 4, shoulderY - 6, 8, 8);
+        ctx.fillStyle = '#f1c39a';
+        ctx.fillRect(shoulderX + dirX * 8 - 3, shoulderY - 5, 6, 6);
+      }
+    }
+    // linesmen skate in to break it up
+    if (fi.over > 0) {
+      const k = Math.min(1, fi.over / 0.9);
+      for (const side of [0, 1] as Side[]) {
+        const dirX = side === 0 ? -1 : 1;
+        const lx = Math.round(cx + dirX * (W / 2 + 20) * (1 - k) + dirX * 52 * k);
+        const spr = skaterSprite(REF_KIT, 'side', side === 1, Math.floor(fi.over * 8) % 4, 'skate', 0);
+        ctx.drawImage(spr, lx - SK_AX * S, floor - SK_AY * S, spr.width * S, spr.height * S);
       }
     }
     // impact pop
     const fx = this.punchFx;
     if (fx) {
-      const tx = cx + (fx.side === 0 ? 1 : -1) * 22;
-      const label = fx.kind === 0 ? 'BLOCK' : fx.kind === 2 ? 'BAM!!' : rng.pick(['POW!', 'WHAP!', 'THUD!']);
-      if (!this.fxLabel || fx.t > 0.28) this.fxLabel = label;
-      text(ctx, this.fxLabel, tx, floor - 66 - Math.round((0.3 - fx.t) * 30), {
-        scale: 2, color: fx.kind === 0 ? '#9be7ff' : '#ffd23f', align: 'center', outline: '#12121c', shadow: null,
+      const tx = cx + Math.round((fi.f[0].x + fi.f[1].x) / 2) + (fx.side === 0 ? 10 : -10);
+      if (!this.fxLabel || fx.t > 0.28) {
+        this.fxLabel =
+          fx.kind === 0 ? 'BLOCKED' : fx.kind === 2 ? 'UPPERCUT!' : fx.kind === 3 ? 'COUNTER!' : fx.kind === 4 ? '3-HIT COMBO!' : fx.kind === 5 ? 'WHIFF!' : rng.pick(['POW!', 'WHAP!', 'THUD!', 'BIFF!']);
+      }
+      const big = fx.kind >= 2 && fx.kind <= 4;
+      text(ctx, this.fxLabel, tx, floor - 70 - Math.round((0.3 - fx.t) * 30), {
+        scale: big ? 2 : fx.kind === 5 ? 1 : 2, color: fx.kind === 0 || fx.kind === 5 ? '#9be7ff' : fx.kind >= 3 ? '#ff7b00' : '#ffd23f', align: 'center', outline: '#12121c', shadow: null,
       });
     }
-    // health bars
+    // health + stamina bars
     const bw = Math.min(150, Math.floor((W - 60) / 2));
     const by = safe.t + 20;
     for (const side of [0, 1] as Side[]) {
       const f = fi.f[side];
       const t = m.teams[side];
       const x = side === 0 ? cx - 8 - bw : cx + 8;
-      chunky(ctx, x - 1, by - 1, bw + 2, 9, '#12121c');
+      chunky(ctx, x - 1, by - 1, bw + 2, 13, '#12121c');
       bar(ctx, x, by, bw, 7, f.hp / 100, f.hp < 30 ? UI.red : t.primary, '#3a1010');
+      bar(ctx, x, by + 9, bw, 2, f.sta / 100, f.sta < 25 ? '#ff7b00' : '#9be7ff', '#1a2040');
       const label = `#${f.num} ${f.name}`;
-      text(ctx, label, side === 0 ? x : x + bw, by + 11, { color: '#fff', align: side === 0 ? 'left' : 'right' });
-      if (f.side === this.viewer && f.human) text(ctx, 'YOU', side === 0 ? x : x + bw, by + 21, { color: UI.yellow, align: side === 0 ? 'left' : 'right', shadow: null });
+      text(ctx, label, side === 0 ? x : x + bw, by + 15, { color: '#fff', align: side === 0 ? 'left' : 'right' });
+      if (f.side === this.viewer && f.human) text(ctx, 'YOU', side === 0 ? x : x + bw, by + 25, { color: UI.yellow, align: side === 0 ? 'left' : 'right', shadow: null });
+      if (f.sta < 12 && f.act !== 'down') text(ctx, 'GASSED', side === 0 ? x + bw : x, by + 15, { color: '#ff7b00', align: side === 0 ? 'right' : 'left', shadow: null });
     }
-    const left = Math.max(0, Math.ceil(15 - fi.t));
-    text(ctx, fi.over ? '' : `0:${String(left).padStart(2, '0')}`, cx, by, { color: '#fff', align: 'center' });
+    const left = Math.max(0, Math.ceil(18 - fi.t));
+    text(ctx, fi.over ? '' : `0:${String(left).padStart(2, '0')}`, cx, by + 2, { color: '#fff', align: 'center' });
+    if (this.koFlash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${this.koFlash})`;
+      ctx.fillRect(0, 0, W, H);
+    }
     if (!input.touchMode && fi.over === 0) {
-      text(ctx, 'K = PUNCH   L = UPPERCUT   HOLD SPACE = BLOCK', cx, H - safe.b - 12, { color: '#fff', align: 'center', outline: '#12121c', shadow: null });
+      text(ctx, 'K PUNCH  L UPPERCUT  HOLD SPACE BLOCK  DOWN DUCK  LEFT/RIGHT MOVE', cx, H - safe.b - 12, { color: '#fff', align: 'center', outline: '#12121c', shadow: null });
     }
   }
 
+  private koFlash = 0;
   private fxLabel = '';
 
   // ---------- HUD ----------

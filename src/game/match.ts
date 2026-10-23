@@ -5,7 +5,7 @@ import { rng } from '../core/rng';
 import type { GPose } from '../render/sprites';
 import {
   CENTER_DOT, CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W,
-  constrainToRink, endDot, type Dot,
+  constrainToRink, endDot, neutralDot, type Dot,
 } from './rink';
 import { aiThink, goalieThink } from './ai';
 
@@ -62,6 +62,8 @@ export class Skater {
   slow = 0;
   pickupCD = 0;
   charge = -1;
+  /** Seconds the PASS button has been held with the puck (-1 when not held). */
+  passHold = -1;
   oneTimer = 0;
   follow = 0;
   anim = 0;
@@ -169,7 +171,7 @@ export interface Snap {
 }
 
 export interface MatchEvent {
-  t: 'hit' | 'save' | 'goal' | 'post' | 'spray' | 'shot' | 'board' | 'deke' | 'charge' | 'crossbar' | 'robbed' | 'mph' | 'hattrick' | 'punch' | 'fightEnd';
+  t: 'hit' | 'save' | 'goal' | 'post' | 'spray' | 'shot' | 'board' | 'deke' | 'charge' | 'crossbar' | 'robbed' | 'mph' | 'hattrick' | 'punch' | 'fightEnd' | 'flex' | 'glass';
   x: number;
   y: number;
   side?: Side;
@@ -199,7 +201,7 @@ export interface Banner {
   big: boolean;
 }
 
-export type FightAct = 'idle' | 'punch' | 'upper' | 'block' | 'hit' | 'down';
+export type FightAct = 'idle' | 'punch' | 'upper' | 'block' | 'duck' | 'hit' | 'down';
 
 export interface Fighter {
   side: Side;
@@ -210,9 +212,21 @@ export interface Fighter {
   t: number;
   cd: number;
   human: boolean;
-  /** AI: decided whether to block the opponent's current swing (-1 undecided). */
+  /** AI: decided how to defend the opponent's current swing (-1 undecided, 0 none, 1 block, 2 duck). */
   guard: number;
+  /** Position relative to center ice in the close-up (left fighter negative). */
+  x: number;
+  /** Stamina: every swing costs some; gassed fighters can't throw. */
+  sta: number;
+  /** Seconds since this fighter last blocked a blow (counter window). */
+  blockT: number;
+  combo: number;
+  comboT: number;
+  helmet: boolean;
 }
+
+/** Fight-result effect codes carried on 'punch' events. */
+export const BLOW = { BLOCK: 0, HIT: 1, UPPER: 2, COUNTER: 3, COMBO: 4, WHIFF: 5 } as const;
 
 export interface Fight {
   f: [Fighter, Fighter];
@@ -227,7 +241,9 @@ const PUNCH_HIT = 0.12;
 const PUNCH_END = 0.26;
 const UPPER_HIT = 0.32;
 const UPPER_END = 0.56;
-const FIGHT_TIME = 15;
+const FIGHT_TIME = 18;
+const PUNCH_RANGE = 54;
+const UPPER_RANGE = 46;
 
 export interface Shootout {
   round: number;
@@ -245,6 +261,8 @@ export interface Shootout {
 export const BAR_DOWN_CHANCE = 0.8;
 /** Slap shot power (0-1) above which the player's shot is a guaranteed bar down. */
 export const HALF_POWER = 0.5;
+/** Holding PASS this long with the puck turns it into a shot wind-up. */
+export const PASS_HOLD = 0.18;
 const PUCK_FRICTION = 0.55;
 const GRAV = 420;
 
@@ -278,6 +296,7 @@ export class Match {
   private penaltyCount = 0;
   private fightPending: Skater | null = null;
   fights = 0;
+  private stopLen = 1.5;
   events: MatchEvent[] = [];
   goals: GoalLog[] = [];
   endType: 'REG' | 'OT' | 'SO' = 'REG';
@@ -428,7 +447,8 @@ export class Match {
           this.practiceReset();
           break;
         }
-        if (this.stateT > 1.5) {
+        if (this.stateT > this.stopLen) {
+          this.stopLen = 1.5;
           this.assessDelayed();
           if (this.fightPending) this.startFight(this.fightPending);
           else this.beginFaceoff(this.pendingDot);
@@ -742,23 +762,37 @@ export class Match {
     if (c.down > 0) return;
     const has = pk.owner === c;
     if (has) {
-      if (inp.a.pressed && c.charge < 0) {
-        const t = this.choosePassTarget(c, inp.move.x, inp.move.y);
-        if (t) this.doPass(c, t);
+      // PASS button: a tap passes; holding it winds up a shot, released to fire
+      if (inp.a.pressed && c.charge < 0) c.passHold = 0;
+      if (c.passHold >= 0) {
+        if (inp.a.down) {
+          c.passHold += dt;
+          if (c.passHold >= PASS_HOLD) c.charge = c.charge < 0 ? PASS_HOLD : Math.min(this.chargeFull + 0.3, c.charge + dt);
+        }
+        if (inp.a.released || !inp.a.down) {
+          const held = c.passHold >= PASS_HOLD;
+          c.passHold = -1;
+          if (!held) {
+            c.charge = -1;
+            const t = this.choosePassTarget(c, inp.move.x, inp.move.y);
+            if (t) this.doPass(c, t);
+            return;
+          }
+          this.releaseShot(c, inp);
+          return;
+        }
         return;
       }
       if (inp.b.pressed) c.charge = 0;
       if (c.charge >= 0 && inp.b.down) c.charge = Math.min(this.chargeFull + 0.3, c.charge + dt);
       if (inp.b.released && c.charge >= 0) {
-        const full = this.chargeFull;
-        const power = c.charge < 0.18 ? 0 : clamp((c.charge - 0.18) / (full - 0.18), 0.25, 1);
-        const aim = Math.abs(inp.move.y) > 0.3 ? CY + Math.sign(inp.move.y) * (GOAL_HW - 3) : null;
-        this.doShoot(c, power, aim, false);
+        this.releaseShot(c, inp);
         return;
       }
       if (inp.c.pressed) this.doDeke(c);
     } else {
       c.charge = -1;
+      c.passHold = -1;
       const incoming = !pk.owner && pk.passTarget === c;
       if (incoming && inp.b.pressed) {
         c.oneTimer = 0.6;
@@ -773,6 +807,14 @@ export class Match {
       }
       if (inp.c.pressed) this.doPoke(c);
     }
+  }
+
+  /** Fire the shot the player has been winding up (power from how long it was held). */
+  private releaseShot(c: Skater, inp: PadInput) {
+    const full = this.chargeFull;
+    const power = c.charge < 0.18 ? 0 : clamp((c.charge - 0.18) / (full - 0.18), 0.25, 1);
+    const aim = Math.abs(inp.move.y) > 0.3 ? CY + Math.sign(inp.move.y) * (GOAL_HW - 3) : null;
+    this.doShoot(c, power, aim, false);
   }
 
   /** Seconds of wind-up for a full-power slap shot. */
@@ -1161,6 +1203,12 @@ export class Match {
       b.charge = -1;
       this.hits[a.side]++;
       this.emit('hit', b.x, b.y, a.side);
+      // slammed into the boards: they flex, and very occasionally the glass goes
+      const probe = { x: b.x, y: b.y };
+      if (constrainToRink(probe, 16).hit) {
+        this.emit('flex', b.x, b.y, a.side, 1);
+        if (rng.next() < 0.05) this.shatter(b.x, b.y);
+      }
       const pk = this.puck;
       if (pk.owner === b) {
         pk.owner = null;
@@ -1261,6 +1309,8 @@ export class Match {
             events.board = Math.max(events.board, Math.min(1, -vn / 300));
             this.emit('board', pk.x, pk.y);
           }
+          if (-vn > 230) this.emit('flex', pk.x, pk.y, undefined, Math.min(1, -vn / 500));
+          if (pk.z > 7 && -vn > 300 && rng.next() < 0.1) this.shatter(pk.x, pk.y);
           if (pk.shot) pk.shot.resolved = true;
         }
       }
@@ -1735,6 +1785,19 @@ export class Match {
     this.beginFaceoff(CENTER_DOT);
   }
 
+  /** The glass shatters: play stops while the pane is replaced. */
+  private shatter(x: number, y: number) {
+    if (this.state !== 'play' || this.cfg.kind === 'attract') return;
+    this.emit('glass', x, y);
+    const dots: Dot[] = [CENTER_DOT];
+    for (const l of [true, false]) for (const t of [true, false]) dots.push(endDot(l, t), neutralDot(l, t));
+    const pk = this.puck;
+    const dot = dots.reduce((a, b) => (Math.hypot(b.x - pk.x, b.y - pk.y) < Math.hypot(a.x - pk.x, a.y - pk.y) ? b : a));
+    this.whistle('GLASS', dot);
+    this.stopLen = 3;
+    this.setBanner('GLASS SHATTERED!', 'PLAY STOPS FOR REPAIRS', '#457b9d', 2.4, true);
+  }
+
   // ---------- fights ----------
   /** The offender drops the gloves with an opponent; humans always fight their own side. */
   private startFight(off: Skater) {
@@ -1747,6 +1810,7 @@ export class Match {
         : [...this.skaters[foeSide]].filter((k) => !k.benched && k.penalty <= 0).sort((a, b) => b.p.chk - a.p.chk)[0] || this.skaters[foeSide][0];
     const mk = (k: Skater): Fighter => ({
       side: k.side, num: k.p.number, name: k.p.name, hp: 100, act: 'idle', t: 0, cd: 0.6, human: this.isHumanSide(k.side), guard: -1,
+      x: k.side === 0 ? -40 : 40, sta: 100, blockT: 99, combo: 0, comboT: 99, helmet: true,
     });
     const a = mk(off);
     const b = mk(foe);
@@ -1775,6 +1839,9 @@ export class Match {
       const pad = me.human ? (s === this.human ? inp : this.inp2) : null;
       me.t += dt;
       me.cd = Math.max(0, me.cd - dt);
+      me.blockT += dt;
+      me.comboT += dt;
+      if (me.comboT > 0.75) me.combo = 0;
       if (me.act === 'punch' || me.act === 'upper') {
         const hitAt = me.act === 'punch' ? PUNCH_HIT : UPPER_HIT;
         const endAt = me.act === 'punch' ? PUNCH_END : UPPER_END;
@@ -1793,11 +1860,22 @@ export class Match {
         continue;
       }
       if (me.act === 'down') continue;
+      me.sta = Math.min(100, me.sta + 15 * dt);
       if (pad) {
+        me.x += pad.move.x * 45 * dt;
         if (pad.b.pressed && me.cd <= 0) this.swing(me, 'punch');
         else if (pad.c.pressed && me.cd <= 0) this.swing(me, 'upper');
-        else me.act = pad.a.down ? 'block' : 'idle';
+        else me.act = pad.move.y > 0.5 ? 'duck' : pad.a.down ? 'block' : 'idle';
       } else this.fightAI(me, opp, dt);
+    }
+    // keep the fighters apart and inside the spotlight
+    const [l, r] = fi.f;
+    l.x = clamp(l.x, -90, 60);
+    r.x = clamp(r.x, -60, 90);
+    if (r.x - l.x < 24) {
+      const mid = (l.x + r.x) / 2;
+      l.x = mid - 12;
+      r.x = mid + 12;
     }
     if (fi.t > FIGHT_TIME) {
       const [a, b] = fi.f;
@@ -1815,26 +1893,56 @@ export class Match {
   }
 
   private swing(me: Fighter, kind: 'punch' | 'upper') {
+    const cost = kind === 'punch' ? 9 : 18;
+    if (me.sta < cost) return; // gassed
+    me.sta -= cost;
     me.act = kind;
     me.t = 0;
-    me.cd = kind === 'punch' ? 0.34 : 1.0;
+    me.cd = (kind === 'punch' ? 0.34 : 1.0) * (me.sta < 30 ? 1.5 : 1);
     me.guard = -1;
   }
 
   private landBlow(me: Fighter, opp: Fighter, upper: boolean) {
     const fi = this.fight!;
     if (opp.act === 'down') return;
+    const dist = Math.abs(fi.f[1].x - fi.f[0].x);
+    const away = me.side === 0 ? 1 : -1;
+    if (dist > (upper ? UPPER_RANGE : PUNCH_RANGE) || (opp.act === 'duck' && !upper)) {
+      me.combo = 0;
+      this.emit('punch', CX, CY, me.side, BLOW.WHIFF);
+      return;
+    }
     const blocked = opp.act === 'block';
-    const dmg = upper ? (blocked ? 5 : 19) : blocked ? 1 : 8;
-    opp.hp = Math.max(0, opp.hp - dmg);
-    if (!blocked) {
+    let dmg = upper ? (blocked ? 5 : 19) : blocked ? 1 : 8;
+    let fx: number = blocked ? BLOW.BLOCK : upper ? BLOW.UPPER : BLOW.HIT;
+    if (upper && opp.act === 'duck') dmg += 6;
+    if (blocked) {
+      opp.blockT = 0;
+      me.combo = 0;
+      opp.x += away * 2;
+    } else {
+      if (me.blockT < 0.45) {
+        dmg = Math.round(dmg * 1.6);
+        fx = BLOW.COUNTER;
+      }
+      me.combo = me.comboT < 0.75 ? me.combo + 1 : 1;
+      me.comboT = 0;
+      if (me.combo >= 3) {
+        dmg += 6;
+        fx = BLOW.COMBO;
+        me.combo = 0;
+      }
       opp.act = 'hit';
       opp.t = 0;
+      opp.x += away * (upper ? 10 : 6);
+      if (upper && opp.helmet && (opp.hp - dmg < 50 || rng.next() < 0.3)) opp.helmet = false;
     }
-    this.emit('punch', CX, CY, me.side, blocked ? 0 : upper ? 2 : 1);
+    opp.hp = Math.max(0, opp.hp - dmg);
+    this.emit('punch', CX, CY, me.side, fx);
     if (opp.hp <= 0) {
       opp.act = 'down';
       opp.t = 0;
+      opp.helmet = false;
       fi.winner = me.side;
       fi.over = 0.001;
       this.setBanner('KNOCKOUT!', `#${me.num} ${me.name} WINS THE FIGHT`, this.teams[me.side].primary, 2.2, true);
@@ -1844,17 +1952,29 @@ export class Match {
 
   private fightAI(me: Fighter, opp: Fighter, dt: number) {
     const lvl = this.versus ? 1 : this.cfg.difficulty;
+    const toward = me.side === 0 ? 1 : -1;
+    const dist = Math.abs(this.fight!.f[1].x - this.fight!.f[0].x);
     const swinging = (opp.act === 'punch' && opp.t < PUNCH_HIT) || (opp.act === 'upper' && opp.t < UPPER_HIT);
     if (swinging) {
-      if (me.guard < 0) me.guard = rng.next() < [0.25, 0.4, 0.55, 0.7][lvl] ? 1 : 0;
-      me.act = me.guard ? 'block' : 'idle';
+      if (me.guard < 0) {
+        const r = rng.next();
+        const skill = [0.3, 0.45, 0.6, 0.75][lvl];
+        me.guard = r < skill * 0.65 ? 1 : r < skill ? (opp.act === 'upper' ? 1 : 2) : 0;
+      }
+      me.act = me.guard === 1 ? 'block' : me.guard === 2 ? 'duck' : 'idle';
       return;
     }
     me.guard = -1;
     me.act = 'idle';
-    if (me.cd > 0) return;
-    if (rng.next() < [1.3, 1.7, 2.2, 2.7][lvl] * dt) this.swing(me, 'punch');
-    else if (rng.next() < 0.45 * dt) this.swing(me, 'upper');
+    // footwork: close in to punching range, back off when gassed
+    const want = me.sta < 25 ? 70 : 42;
+    if (dist > want + 6) me.x += toward * 32 * dt;
+    else if (dist < want - 10) me.x -= toward * 26 * dt;
+    if (me.cd > 0 || dist > PUNCH_RANGE) return;
+    // counter right after a block, otherwise jab and the odd uppercut
+    if (me.blockT < 0.3 && rng.next() < 0.5 + lvl * 0.12) this.swing(me, 'punch');
+    else if (rng.next() < [1.3, 1.7, 2.2, 2.7][lvl] * dt) this.swing(me, 'punch');
+    else if (dist <= UPPER_RANGE && rng.next() < (opp.act === 'duck' ? 3 : 0.45) * dt) this.swing(me, 'upper');
   }
 
   private endFight() {

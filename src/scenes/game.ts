@@ -228,6 +228,8 @@ export class GameScene implements Scene {
       if (e.t === 'crossbar') audio.sfx(e.value ? 'bardown' : 'crossbar');
       if (e.t === 'robbed') audio.sfx('ooh');
       if (e.t === 'punch') audio.sfx('punch', e.value ?? 1);
+      if (e.t === 'flex') audio.sfx('rattle', Math.max(0.5, e.value ?? 0.5));
+      if (e.t === 'glass') audio.sfx('glass');
       if (e.t === 'fightEnd') audio.cheer(3, 0.26);
       if (e.t === 'goal') {
         // NHL tradition: the horn and goal song play only for the home team
@@ -290,7 +292,7 @@ export class GameScene implements Scene {
     };
     const touch = input.touchMode;
     const me = m.ctrlOf(this.viewer);
-    if (pk.owner && pk.owner === me) show('puck', touch ? 'TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT' : 'K = SHOOT (HOLD FOR SLAPSHOT)  SPACE = PASS');
+    if (pk.owner && pk.owner === me) show('puck', touch ? 'TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT' : 'TAP SPACE = PASS   HOLD SPACE = WIND UP A SHOT');
     else if (pk.owner && pk.owner.side !== this.viewer) show('defend', touch ? 'CHECK OR POKE TO STEAL - SWITCH CHANGES PLAYER' : 'K = CHECK  L = POKE  SPACE = SWITCH');
   }
 

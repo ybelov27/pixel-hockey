@@ -8,7 +8,8 @@ import { bestOn, colorDist, shade } from './colors';
 import { text, textWidth, tinyNumber } from './font';
 
 export interface ArenaArt {
-  crowd: [HTMLCanvasElement, HTMLCanvasElement];
+  /** Seated, bobbing, and standing with arms up. */
+  crowd: [HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement];
   rink: HTMLCanvasElement;
   near: HTMLCanvasElement;
 }
@@ -247,9 +248,11 @@ export function buildArena(home: Team, away: Team): ArenaArt {
   // crowd: two frames for bobbing heads
   const crowdA = mk();
   const crowdB = mk();
+  const crowdC = mk();
   const ca = crowdA.getContext('2d')!;
   const cb = crowdB.getContext('2d')!;
-  for (const c of [ca, cb]) {
+  const cc = crowdC.getContext('2d')!;
+  for (const c of [ca, cb, cc]) {
     c.fillStyle = '#20243c';
     c.fillRect(0, 0, WORLD_PX_W, WORLD_PX_H);
     for (let y = 0; y < WORLD_PX_H; y += 5) {
@@ -279,11 +282,18 @@ export function buildArena(home: Team, away: Team): ArenaArt {
         c.fillStyle = shirt;
         c.fillRect(x, y + 2 - dy, 3, 2);
         c.fillStyle = skin;
-        c.fillRect(x + 1 - (dy && rng.chance(0.5) ? 0 : 0), y - dy, 2, 2);
+        c.fillRect(x + 1, y - dy, 2, 2);
       }
+      // on their feet, arms in the air
+      cc.fillStyle = shirt;
+      cc.fillRect(x, y + 1, 3, 3);
+      cc.fillStyle = skin;
+      cc.fillRect(x + 1, y - 1, 2, 2);
+      cc.fillRect(x - 1, y - 2, 1, 2);
+      cc.fillRect(x + 3, y - 2, 1, 2);
     }
   }
-  for (const c of [ca, cb]) {
+  for (const c of [ca, cb, cc]) {
     c.fillStyle = 'rgba(16,18,40,0.42)';
     c.fillRect(0, 0, WORLD_PX_W, WORLD_PX_H);
   }
@@ -298,14 +308,14 @@ export function buildArena(home: Team, away: Team): ArenaArt {
     if (!allowed(x, y) || !allowed(x + w, y) || !allowed(x, y + 9) || !allowed(x + w, y + 9)) continue;
     if (placed.some(([px, py, pw]) => x < px + pw + 12 && x + w + 12 > px && Math.abs(y - py) < 16)) continue;
     placed.push([x, y, w]);
-    for (const [c, dy] of [[ca, 0], [cb, 1]] as [CanvasRenderingContext2D, number][]) {
+    for (const [c, dy] of [[ca, 0], [cb, 1], [cc, 2]] as [CanvasRenderingContext2D, number][]) {
       c.fillStyle = '#f4f4ef';
       c.fillRect(x, y - dy, w, 9);
       text(c, label, x + 2, y + 1 - dy, { color: home.primary === '#ffffff' ? '#111' : shade(home.primary, 0.9), shadow: null });
     }
   }
   // catwalk light rig and hanging banners at the top of the bowl
-  for (const c of [ca, cb]) {
+  for (const c of [ca, cb, cc]) {
     c.fillStyle = '#0d0f1e';
     c.fillRect(0, 0, WORLD_PX_W, 26);
     c.fillStyle = '#2b2f48';
@@ -340,7 +350,7 @@ export function buildArena(home: Team, away: Team): ArenaArt {
   // team benches behind the far glass
   for (const [x0, team] of [[CX - 110, home], [CX + 20, away]] as [number, Team][]) {
     const sy = Math.round(projY(0)) - WALL_H - GLASS_H - 12;
-    for (const c of [ca, cb]) {
+    for (const c of [ca, cb, cc]) {
       c.fillStyle = '#15182a';
       c.fillRect(projX(x0), sy, 90, 10);
       c.fillStyle = shade(team.primary, 0.7);
@@ -353,5 +363,5 @@ export function buildArena(home: Team, away: Team): ArenaArt {
       }
     }
   }
-  return { crowd: [crowdA, crowdB], rink, near };
+  return { crowd: [crowdA, crowdB, crowdC], rink, near };
 }

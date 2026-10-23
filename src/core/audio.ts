@@ -228,8 +228,27 @@ class Audio {
         [0.75, 1.0, 1.25, 1.375, 1.5].forEach((t) => this.noise(0.05, 0.25, 'bandpass', 1500, t, 1.2));
         break;
       }
+      case 'glass': {
+        // the crack, then shards raining down and tinkling
+        this.noise(0.12, 0.5, 'highpass', 1500);
+        this.noise(0.25, 0.3, 'bandpass', 5000, 0.02, 1.5);
+        for (let i = 0; i < 14; i++) {
+          const d = 0.05 + Math.random() * 0.7;
+          this.noise(0.03, 0.12, 'highpass', 6000, d);
+          this.tone(3000 + Math.random() * 4500, 0.08 + Math.random() * 0.1, 'sine', 0.05, 0, d);
+        }
+        this.cheer(2.5, 0.24);
+        break;
+      }
+      case 'rattle':
+        this.noise(0.25, 0.22 * power, 'bandpass', 320, 0, 1.2);
+        this.tone(68, 0.22, 'triangle', 0.25 * power, 50);
+        this.noise(0.18, 0.08 * power, 'highpass', 3500, 0.02);
+        break;
       case 'punch':
-        if (power <= 0) {
+        if (power === 5) {
+          this.noise(0.12, 0.1, 'bandpass', 1800, 0, 0.8);
+        } else if (power <= 0) {
           this.noise(0.06, 0.18, 'lowpass', 900);
           this.tone(300, 0.05, 'triangle', 0.08, 200);
         } else {
@@ -237,6 +256,7 @@ class Audio {
           this.tone(130, 0.12, 'square', 0.16, 55);
           this.noise(0.03, 0.2, 'highpass', 3000);
           if (power >= 2) this.cheer(1.2, 0.16);
+          if (power >= 3) this.tone(880, 0.12, 'square', 0.05, 1320, 0.05);
         }
         break;
       case 'whoosh':

@@ -63,3 +63,67 @@ describe('penalties and fights', () => {
     expect(m.fights).toBe(0);
   });
 });
+
+describe('fight mechanics', () => {
+  function fightNow() {
+    const m = game();
+    m.callPenalty(m.skaters[1][1], 'ROUGHING');
+    for (let i = 0; i < 120; i++) m.update(1 / 60, null);
+    expect(m.state).toBe('fight');
+    return m;
+  }
+  const hold = (over: Partial<PadInput> = {}): PadInput => ({ move: { x: 0, y: 0 }, sprint: false, a: btn(), b: btn(), c: btn(), ...over });
+
+  it('punches only land in range: from far away they whiff', () => {
+    const m = fightNow();
+    const fi = m.fight!;
+    fi.f[0].x = -90;
+    fi.f[1].x = 90;
+    fi.f[1].act = 'idle';
+    fi.f[0].cd = 0;
+    fi.f[0].sta = 100;
+    const hp = fi.f[1].hp;
+    m.update(1 / 60, hold({ b: { pressed: true, down: true, released: false } }));
+    let whiff = false;
+    for (let i = 0; i < 20; i++) {
+      fi.f[1].cd = 9; // keep the CPU from swinging back
+      m.update(1 / 60, hold());
+      if (m.events.some((e) => e.t === 'punch' && e.side === 0 && e.value === 5)) whiff = true;
+      m.events.length = 0;
+    }
+    expect(whiff).toBe(true);
+    expect(fi.f[1].hp).toBe(hp);
+  });
+
+  it('ducking slips a jab, and a gassed fighter cannot swing', () => {
+    const m = fightNow();
+    const fi = m.fight!;
+    const me = fi.f[0];
+    const cpu = fi.f[1];
+    me.x = -20;
+    cpu.x = 20;
+    cpu.cd = 0;
+    cpu.act = 'punch';
+    cpu.t = 0;
+    const hp = me.hp;
+    for (let i = 0; i < 12; i++) m.update(1 / 60, hold({ move: { x: 0, y: 1 } }));
+    expect(me.hp).toBe(hp);
+    me.sta = 3;
+    me.cd = 0;
+    m.update(1 / 60, hold({ b: { pressed: true, down: true, released: false } }));
+    expect(me.act).not.toBe('punch');
+  });
+});
+
+describe('glass', () => {
+  it('a shattered pane stops play for repairs, then a faceoff', () => {
+    const m = game();
+    (m as unknown as { shatter(x: number, y: number): void }).shatter(300, 2);
+    expect(m.state).toBe('stoppage');
+    expect(m.banner?.text).toBe('GLASS SHATTERED!');
+    for (let i = 0; i < 60 * 2; i++) m.update(1 / 60, null);
+    expect(m.state).toBe('stoppage');
+    for (let i = 0; i < 60 * 2; i++) m.update(1 / 60, null);
+    expect(m.state).toBe('faceoff');
+  });
+});

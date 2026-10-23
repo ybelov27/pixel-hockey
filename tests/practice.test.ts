@@ -55,6 +55,8 @@ describe('practice mode', () => {
     const inp: PadInput = { move: { x: 0, y: 0 }, sprint: false, a: btn(), b: btn(), c: btn() };
     inp.a = { pressed: true, down: true, released: false };
     m.update(1 / 60, inp);
+    inp.a = { pressed: false, down: false, released: true }; // tap: the pass goes on release
+    m.update(1 / 60, inp);
     inp.a = btn();
     expect(m.puck.owner).toBeNull();
     let back = false;
@@ -64,5 +66,36 @@ describe('practice mode', () => {
     }
     expect(back).toBe(true);
     expect(m.ctrl).toBe(me);
+  });
+});
+
+describe('pass button', () => {
+  it('a quick tap passes', () => {
+    const m = practice();
+    const inp: PadInput = { move: { x: 0, y: 0 }, sprint: false, a: btn(), b: btn(), c: btn() };
+    inp.a = { pressed: true, down: true, released: false };
+    m.update(1 / 60, inp);
+    inp.a = { pressed: false, down: false, released: true };
+    m.update(1 / 60, inp);
+    expect(m.puck.owner).toBeNull();
+    expect(m.puck.passTarget).not.toBeNull();
+    expect(m.puck.shot).toBeNull();
+  });
+
+  it('holding it winds up a shot that fires on release', () => {
+    const m = practice();
+    const me = m.ctrl!;
+    const inp: PadInput = { move: { x: 0, y: 0 }, sprint: false, a: btn(), b: btn(), c: btn() };
+    inp.a = { pressed: true, down: true, released: false };
+    m.update(1 / 60, inp);
+    inp.a = { pressed: false, down: true, released: false };
+    for (let i = 0; i < 40; i++) m.update(1 / 60, inp);
+    expect(m.puck.owner).toBe(me);
+    expect(me.charge).toBeGreaterThan(0.3);
+    inp.a = { pressed: false, down: false, released: true };
+    m.update(1 / 60, inp);
+    expect(m.puck.owner).toBeNull();
+    expect(m.puck.shot?.slap).toBe(true);
+    expect(m.puck.passTarget).toBeNull();
   });
 });
