@@ -5,7 +5,7 @@ import {
   RINK_L, RINK_W, WORLD_PX_H, WORLD_PX_W, YS, projX, projY, rinkXRange, rinkYRange,
 } from '../game/rink';
 import { bestOn, colorDist, shade } from './colors';
-import { text, textWidth } from './font';
+import { text, textWidth, tinyNumber } from './font';
 
 export interface ArenaArt {
   crowd: [HTMLCanvasElement, HTMLCanvasElement];
@@ -152,6 +152,37 @@ export function buildArena(home: Team, away: Team): ArenaArt {
   text(g, home.abbr, projX(CX), projY(CY) - 3, { color: tc, align: 'center', shadow: 'rgba(0,0,0,0.35)' });
   ellipse(CX, CY - 15, 2, BLUE, true);
 
+  // painted sponsor logos in the neutral zone (faint, under the ice)
+  for (const [label, y] of [['PIXEL COLA', 40], ['RETRO BANK', RINK_W - 34]] as [string, number][]) {
+    g.globalAlpha = 0.22;
+    text(g, label, projX(CX), projY(y) - 3, { color: '#c0392b', align: 'center', shadow: null });
+    g.globalAlpha = 1;
+  }
+  // glossy sheen streaks and soft shading near the boards
+  for (let k = 0; k < 9; k++) {
+    const x0 = rng.range(40, RINK_L - 80);
+    const y0 = rng.range(20, RINK_W - 40);
+    const len = rng.range(30, 90);
+    for (let i = 0; i < len; i++) {
+      const x = x0 + i;
+      const y = y0 + i * 0.35;
+      const [a0, a1] = rinkXRange(y);
+      if (x < a0 + 3 || x > a1 - 3 || y > RINK_W - 3) continue;
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      g.fillRect(Math.round(projX(x)), Math.round(projY(y)), 1, 1);
+    }
+  }
+  for (let sy = top; sy < bot; sy++) {
+    const [x0, x1] = rinkXRange(rowY(sy));
+    g.fillStyle = 'rgba(70,100,150,0.07)';
+    g.fillRect(Math.round(projX(x0)), sy, 7, 1);
+    g.fillRect(Math.round(projX(x1)) - 7, sy, 7, 1);
+    if (sy - top < 4) {
+      g.fillStyle = `rgba(40,60,100,${0.16 - (sy - top) * 0.035})`;
+      g.fillRect(Math.round(projX(x0)), sy, Math.round(x1 - x0), 1);
+    }
+  }
+
   // far wall: rail, white face with ads, yellow kick plate; glass above
   const wallTop: number[] = [];
   for (let x = 0; x < RINK_L; x++) {
@@ -256,6 +287,56 @@ export function buildArena(home: Team, away: Team): ArenaArt {
     c.fillStyle = 'rgba(16,18,40,0.42)';
     c.fillRect(0, 0, WORLD_PX_W, WORLD_PX_H);
   }
+  // fans holding signs
+  const signs = [`GO ${home.abbr}!`, 'GOAL!', '#1 FAN', `${home.abbr} RULES`, 'BAR DOWN!', 'SHOOT!'];
+  const placed: [number, number, number][] = [];
+  for (let i = 0; i < 40 && placed.length < 14; i++) {
+    const label = rng.pick(signs);
+    const w = textWidth(label) + 4;
+    const x = Math.round(rng.range(4, WORLD_PX_W - w - 4));
+    const y = Math.round(rng.range(40, WORLD_PX_H - 12));
+    if (!allowed(x, y) || !allowed(x + w, y) || !allowed(x, y + 9) || !allowed(x + w, y + 9)) continue;
+    if (placed.some(([px, py, pw]) => x < px + pw + 12 && x + w + 12 > px && Math.abs(y - py) < 16)) continue;
+    placed.push([x, y, w]);
+    for (const [c, dy] of [[ca, 0], [cb, 1]] as [CanvasRenderingContext2D, number][]) {
+      c.fillStyle = '#f4f4ef';
+      c.fillRect(x, y - dy, w, 9);
+      text(c, label, x + 2, y + 1 - dy, { color: home.primary === '#ffffff' ? '#111' : shade(home.primary, 0.9), shadow: null });
+    }
+  }
+  // catwalk light rig and hanging banners at the top of the bowl
+  for (const c of [ca, cb]) {
+    c.fillStyle = '#0d0f1e';
+    c.fillRect(0, 0, WORLD_PX_W, 26);
+    c.fillStyle = '#2b2f48';
+    c.fillRect(0, 24, WORLD_PX_W, 2);
+    for (let x = 6; x < WORLD_PX_W; x += 14) {
+      c.fillStyle = '#fff6c8';
+      c.fillRect(x, 22, 2, 2);
+      c.fillStyle = 'rgba(255,246,200,0.05)';
+      c.beginPath();
+      c.moveTo(x - 1, 24);
+      c.lineTo(x + 3, 24);
+      c.lineTo(x + 9, 60);
+      c.lineTo(x - 7, 60);
+      c.closePath();
+      c.fill();
+    }
+    const banners = [home.primary, home.secondary, home.primary, home.primary, home.secondary];
+    for (let i = 0; i < 8; i++) {
+      const bx = 40 + i * 86;
+      const col = banners[i % banners.length];
+      const trim = col === home.primary ? (colorDist(home.primary, home.secondary) < 60 ? home.accent : home.secondary) : home.primary;
+      c.fillStyle = col;
+      c.fillRect(bx, 2, 14, 18);
+      c.fillStyle = trim;
+      c.fillRect(bx, 2, 14, 2);
+      c.fillRect(bx, 16, 14, 1);
+      c.fillRect(bx + 6, 20, 2, 2);
+      tinyNumber(c, [9, 4, 77, 99, 19, 66, 12, 33][i], bx + (i === 0 || i === 1 ? 6 : 4), 8, bestOn(col, [home.accent, '#ffffff', '#111111']));
+    }
+  }
+
   // team benches behind the far glass
   for (const [x0, team] of [[CX - 110, home], [CX + 20, away]] as [number, Team][]) {
     const sy = Math.round(projY(0)) - WALL_H - GLASS_H - 12;

@@ -66,6 +66,7 @@ function boot() {
     present();
   };
   requestAnimationFrame(frame);
+  if (import.meta.env.DEV) (window as unknown as { __ph: unknown }).__ph = { scenes };
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {

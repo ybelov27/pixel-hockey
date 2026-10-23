@@ -157,12 +157,33 @@ class Audio {
       case 'whistle':
         for (let i = 0; i < 6; i++) this.tone(i % 2 ? 2900 : 3150, 0.06, 'square', 0.05, 0, i * 0.055);
         break;
-      case 'horn': {
-        const notes = [110, 138.6, 164.8, 220];
-        for (const f of notes) this.tone(f, 1.8, 'sawtooth', 0.09);
-        this.cheer(2.5);
+      case 'horn':
+        this.goalHorn();
+        break;
+      case 'groan':
+        this.noise(1.2, 0.18, 'lowpass', 500);
+        this.tone(220, 0.9, 'triangle', 0.05, 140);
+        this.cheer(0.9, 0.06);
+        break;
+      case 'ooh':
+        this.tone(330, 0.6, 'triangle', 0.05, 440);
+        this.cheer(1, 0.12);
+        break;
+      case 'crossbar':
+        this.tone(2093, 0.5, 'square', 0.12, 2050);
+        this.tone(3136, 0.35, 'triangle', 0.12);
+        this.tone(1568, 0.6, 'sine', 0.1);
+        break;
+      case 'chant': {
+        // organ "let's go ___" then clap clap clap-clap-clap
+        const org = ['C5', 'C5', 'G5'];
+        org.forEach((n, i) => this.tone(NOTE[n], 0.16, 'square', 0.06, 0, i * 0.2));
+        [0.75, 1.0, 1.25, 1.375, 1.5].forEach((t) => this.noise(0.05, 0.25, 'bandpass', 1500, t, 1.2));
         break;
       }
+      case 'whoosh':
+        this.noise(0.25, 0.08, 'highpass', 3000);
+        break;
       case 'drop':
         this.tone(1200, 0.03, 'square', 0.06);
         break;
@@ -187,7 +208,65 @@ class Audio {
     }
   }
 
-  cheer(dur = 2) {
+  /** Arena goal horn: long, detuned low brass chord with vibrato. */
+  private goalHorn() {
+    if (!this.ok()) return;
+    const c = this.ctx!;
+    const t = c.currentTime;
+    const out = c.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(0.16, t + 0.08);
+    out.gain.setValueAtTime(0.16, t + 2.4);
+    out.gain.exponentialRampToValueAtTime(0.0001, t + 3.0);
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    lp.connect(out);
+    out.connect(this.master!);
+    const lfo = c.createOscillator();
+    const lfoGain = c.createGain();
+    lfo.frequency.value = 5.5;
+    lfoGain.gain.value = 2.5;
+    lfo.connect(lfoGain);
+    for (const [f, det] of [[110, -6], [110, 7], [138.6, 0], [164.8, -4], [220, 5]] as [number, number][]) {
+      const o = c.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.detune.value = det;
+      lfoGain.connect(o.frequency);
+      o.connect(lp);
+      o.start(t);
+      o.stop(t + 3.05);
+    }
+    lfo.start(t);
+    lfo.stop(t + 3.05);
+    this.cheer(4, 0.22);
+  }
+
+  /** A short chiptune goal song generated from the team name, so every club sounds different. */
+  goalSong(seed: number, delay = 2.6) {
+    if (!this.ok()) return;
+    const scale = [0, 2, 4, 7, 9, 12, 14, 16];
+    let h = seed >>> 0;
+    const next = () => {
+      h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0;
+      h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
+      return (h ^ (h >>> 16)) >>> 0;
+    };
+    const root = 60 + (next() % 7);
+    const step = 0.13;
+    const motif: number[] = [];
+    for (let i = 0; i < 4; i++) motif.push(scale[next() % scale.length]);
+    const seq = [...motif, ...motif, ...motif.map((n) => n + 2), 12, -1, 12, 12];
+    seq.forEach((n, i) => {
+      if (n < 0) return;
+      const f = 440 * Math.pow(2, (root + n - 69) / 12);
+      this.tone(f, step * 0.9, 'square', 0.06, 0, delay + i * step);
+      if (i % 4 === 0) this.tone(f / 4, step * 3.5, 'triangle', 0.12, 0, delay + i * step);
+    });
+  }
+
+  cheer(dur = 2, vol = 0.22) {
     if (!this.ok() || !this.noiseBuf) return;
     const c = this.ctx!;
     const t = c.currentTime;
@@ -200,7 +279,7 @@ class Audio {
     f.Q.value = 0.6;
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.22, t + 0.25);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.25);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     s.connect(f);
     f.connect(g);

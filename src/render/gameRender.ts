@@ -1,6 +1,6 @@
 import type { Match, MatchEvent, Side, SkSnap, Snap } from '../game/match';
 import {
-  CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, WORLD_PX_H, WORLD_PX_W, YS, projX, projY,
+  CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W, WORLD_PX_H, WORLD_PX_W, YS, projX, projY,
 } from '../game/rink';
 import { buildArena, type ArenaArt } from './arena';
 import { G_AX, G_AY, REF_KIT, SK_AX, SK_AY, goalieSprite, kitFor, skaterSprite, type Kit, type View } from './sprites';
@@ -24,6 +24,19 @@ interface Particle {
   g: number;
 }
 
+type ThrowKind = 'hat' | 'octopus' | 'rat';
+
+interface Thrown {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  kind: ThrowKind;
+  color: string;
+}
+
 interface Pop {
   x: number;
   y: number;
@@ -45,6 +58,13 @@ export class GameRenderer {
   private hype = 0;
   private netRipple: [number, number] = [0, 0];
   private first = true;
+  private thrown: Thrown[] = [];
+  private lamp: [number, number] = [0, 0];
+  private jumbo: { text: string; color: string; t: number } | null = null;
+  private flashes: { x: number; y: number; t: number }[] = [];
+  private flashRate = 1;
+  private lastState = '';
+  private zam = { x: -60, lane: 0, trail: 0 };
 
   constructor(private m: Match) {
     this.arena = buildArena(m.teams[0], m.teams[1]);
@@ -83,15 +103,57 @@ export class GameRenderer {
         this.hype = 3.2;
         const gi = e.x < RINK_L / 2 ? 0 : 1;
         this.netRipple[gi] = 0.6;
+        this.lamp[gi] = 3;
+        this.flashRate = 10;
+        if (!this.jumbo || this.jumbo.t < 1) this.showJumbo('GOAL!', t.primary, 3);
+        // fan traditions: octopus in Detroit, plastic rats in Florida
+        if (e.side === 0 && t.abbr === 'DET') this.throwItem('octopus');
+        if (e.side === 0 && t.abbr === 'FLA') for (let i = 0; i < 5; i++) this.throwItem('rat');
         if (shake) this.shake = 5;
         break;
       }
       case 'deke':
         this.pops.push({ x, y: y - 24, text: 'DEKE!', color: '#ffffff', life: 0.5 });
         break;
+      case 'shot':
+        this.flashRate = Math.max(this.flashRate, 4);
+        break;
+      case 'crossbar':
+        for (let i = 0; i < 12; i++) this.part(x, y - 14, rng.gauss() * 60, rng.gauss() * 40 - 30, 0.35, i % 2 ? '#ffd23f' : '#ffffff', 1, 120);
+        if (e.value) this.showJumbo('BAR DOWN!', '#ffd23f', 3);
+        else this.pops.push({ x, y: y - 26, text: 'CROSSBAR!', color: '#ffffff', life: 0.9 });
+        if (settings.shake) this.shake = Math.max(this.shake, 2);
+        break;
+      case 'robbed':
+        this.pops.push({ x, y: y - 30, text: 'ROBBED!', color: '#9be7ff', life: 1 });
+        this.flashRate = 6;
+        break;
+      case 'mph':
+        this.pops.push({ x, y: y - 28, text: `${e.value} MPH`, color: '#ffd23f', life: 0.9 });
+        break;
+      case 'hattrick': {
+        this.showJumbo('HAT TRICK!', '#ffd23f', 4);
+        for (let i = 0; i < 16; i++) this.throwItem('hat');
+        break;
+      }
       default:
         break;
     }
+  }
+
+  showJumbo(text: string, color: string, t: number) {
+    this.jumbo = { text, color, t };
+  }
+
+  private throwItem(kind: ThrowKind) {
+    const fromTop = rng.chance(0.5);
+    const tx = rng.range(120, RINK_L - 120);
+    const ty = rng.range(40, RINK_W - 40);
+    const sx = tx + rng.gauss() * 40;
+    const sy = fromTop ? 2 : RINK_W - 2;
+    const t = 0.8 + rng.next() * 0.5;
+    const hatCols = ['#1d1d26', '#c8102e', '#f4f4f4', '#003087', '#6b4f2a', '#2f6b2f'];
+    this.thrown.push({ x: sx, y: sy, z: 30, vx: (tx - sx) / t, vy: (ty - sy) / t, vz: 60, kind, color: kind === 'hat' ? rng.pick(hatCols) : '' });
   }
 
   private part(x: number, y: number, vx: number, vy: number, life: number, color: string, size: number, g: number) {
@@ -145,6 +207,49 @@ export class GameRenderer {
     }
     this.netRipple[0] = Math.max(0, this.netRipple[0] - dt);
     this.netRipple[1] = Math.max(0, this.netRipple[1] - dt);
+    this.lamp[0] = Math.max(0, this.lamp[0] - dt);
+    this.lamp[1] = Math.max(0, this.lamp[1] - dt);
+    if (this.jumbo) {
+      this.jumbo.t -= dt;
+      if (this.jumbo.t <= 0) this.jumbo = null;
+    }
+    const st = this.m.state;
+    if (st === 'faceoff' && this.lastState !== 'faceoff') this.thrown = [];
+    if (st === 'periodEnd' && this.lastState !== 'periodEnd') this.zam = { x: Math.max(-40, this.camX - projX(0) - 30), lane: 0, trail: Math.max(-40, this.camX - projX(0) - 30) };
+    this.lastState = st;
+    for (const o of this.thrown) {
+      if (o.z > 0 || o.vz > 0) {
+        o.vz -= 160 * dt;
+        o.z = Math.max(0, o.z + o.vz * dt);
+        o.x += o.vx * dt;
+        o.y += o.vy * dt;
+        if (o.z === 0) {
+          o.vx *= 0.25;
+          o.vy *= 0.25;
+          o.vz = 0;
+        }
+      } else {
+        o.x += o.vx * dt;
+        o.y += o.vy * dt;
+        o.vx *= 0.96;
+        o.vy *= 0.96;
+      }
+    }
+    // camera flashes in the stands
+    this.flashRate = Math.max(1, this.flashRate - dt * 3);
+    this.flashes = this.flashes.filter((f) => (f.t -= dt) > 0);
+    if (rng.next() < dt * this.flashRate * 2.5) {
+      const fx = this.camX + rng.next() * display.W;
+      const fy = this.camY + rng.next() * display.H;
+      const wx = fx - projX(0);
+      const top = projY(0) - 30;
+      const bot = projY(RINK_W) + 8;
+      if (wx < -8 || wx > RINK_L + 8 || fy < top || fy > bot) this.flashes.push({ x: fx, y: fy, t: 0.12 });
+    }
+    if (st === 'intermission' || st === 'periodEnd') {
+      this.zam.x += 45 * dt;
+      if (this.zam.x > RINK_L + 40) this.zam = { x: -40, lane: 0, trail: -40 };
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, snap: Snap) {
@@ -160,7 +265,18 @@ export class GameRenderer {
       ctx.fillStyle = 'rgba(255,255,255,0.06)';
       ctx.fillRect(0, 0, W, H);
     }
+    for (const f of this.flashes) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.round(f.x - ox), Math.round(f.y - oy), 1, 1);
+      if (f.t > 0.07) {
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.fillRect(Math.round(f.x - ox) - 1, Math.round(f.y - oy), 3, 1);
+        ctx.fillRect(Math.round(f.x - ox), Math.round(f.y - oy) - 1, 1, 3);
+      }
+    }
+    this.drawJumbotron(ctx, ox, oy);
     ctx.drawImage(this.arena.rink, -ox, -oy);
+    this.drawResurfacer(ctx, ox, oy);
 
     // depth-sorted drawables
     const items: { y: number; draw: () => void }[] = [];
@@ -174,7 +290,10 @@ export class GameRenderer {
           const py = Math.round(projY(g.y) - oy);
           ctx.fillStyle = 'rgba(10,20,40,0.25)';
           ctx.fillRect(px - 6, py - 1, 13, 3);
-          ctx.drawImage(goalieSprite(kit, g.pose, g.rs < 0), px - (g.rs < 0 ? G_AX + 1 : G_AX), py - G_AY);
+          const gs = goalieSprite(kit, g.pose, g.rs < 0);
+          const gax = g.rs < 0 ? G_AX + 1 : G_AX;
+          this.reflect(ctx, gs, px, py, gax, G_AY);
+          ctx.drawImage(gs, px - gax, py - G_AY);
           // paddle stick
           this.line(ctx, px + g.rs * 3, py - 7, px + g.rs * 6, py - 1, '#d7b377');
           ctx.fillStyle = '#1b1b22';
@@ -196,10 +315,13 @@ export class GameRenderer {
         },
       });
     }
+    for (const o of this.thrown) items.push({ y: o.y, draw: () => this.drawThrown(ctx, o, ox, oy) });
     items.sort((a, b) => a.y - b.y);
     for (const it of items) it.draw();
 
     ctx.drawImage(this.arena.near, -ox, -oy);
+    this.drawGoalLights(ctx, ox, oy);
+    this.drawReticle(ctx, ox, oy);
 
     for (const p of this.parts) {
       ctx.globalAlpha = Math.min(1, (p.life / p.max) * 2);
@@ -248,6 +370,7 @@ export class GameRenderer {
     const handX = view === 'side' ? px + (flip ? -3 : 3) : view === 'front' ? px + 5 : px - 5;
     const handY = py - 9;
     if (!s.down && !s.celebrate && view === 'back') this.drawStick(ctx, s, handX, handY, ox, oy);
+    this.reflect(ctx, sprite, px, py, SK_AX, SK_AY);
     ctx.drawImage(sprite, px - SK_AX, py - SK_AY);
     if (!s.down && !s.celebrate && view !== 'back') this.drawStick(ctx, s, handX, handY, ox, oy);
     if (s.ctrl) {
@@ -366,6 +489,159 @@ export class GameRenderer {
     ctx.fillRect(px - 1, py - 1 - z, 3, 2);
     ctx.fillStyle = '#4a4a58';
     ctx.fillRect(px - 1, py - 1 - z, 1, 1);
+  }
+
+  /** Faint mirror image of a sprite on the glossy ice. */
+  private reflect(ctx: CanvasRenderingContext2D, sprite: HTMLCanvasElement, px: number, py: number, ax: number, ay: number) {
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.translate(px - ax, py + 1);
+    ctx.scale(1, -0.55);
+    ctx.drawImage(sprite, 0, -ay);
+    ctx.restore();
+  }
+
+  private drawJumbotron(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
+    const m = this.m;
+    const w = 84;
+    const h = 30;
+    const x = Math.round(projX(CX) - w / 2 - ox);
+    const y = Math.round(projY(0) - 26 - h - 1 - oy);
+    if (x > display.W || x + w < 0 || y > display.H || y + h + 8 < 0) return;
+    ctx.fillStyle = '#3a3f5a';
+    ctx.fillRect(x + 10, y - 12, 1, 12);
+    ctx.fillRect(x + w - 11, y - 12, 1, 12);
+    chunky(ctx, x, y, w, h + 4, '#1b1e30');
+    ctx.fillStyle = '#05060c';
+    ctx.fillRect(x + 3, y + 3, w - 6, h - 4);
+    for (let i = 0; i < 10; i++) {
+      ctx.fillStyle = (Math.floor(performance.now() / 200) + i) % 3 === 0 ? '#ffd23f' : '#5a5030';
+      ctx.fillRect(x + 4 + i * 8, y + h + 1, 2, 1);
+    }
+    const j = this.jumbo;
+    if (j) {
+      if (Math.floor(performance.now() / 180) % 2 === 0) {
+        ctx.fillStyle = j.color;
+        ctx.fillRect(x + 3, y + 3, w - 6, h - 4);
+      }
+      text(ctx, j.text, x + w / 2, y + 10, { color: '#ffffff', align: 'center', outline: '#05060c', shadow: null });
+      return;
+    }
+    const box = (side: Side, bx: number) => {
+      const t = m.teams[side];
+      ctx.fillStyle = t.primary;
+      ctx.fillRect(bx, y + 5, 19, 9);
+      text(ctx, t.abbr, bx + 10, y + 6, { color: bestOn(t.primary, [t.accent, t.secondary, '#ffffff', '#111111']), align: 'center', shadow: null });
+      text(ctx, String(m.score[side]), bx + 24, y + 6, { color: '#ffd23f', align: 'center', shadow: null });
+    };
+    box(1, x + 6);
+    box(0, x + 46);
+    const c = Math.ceil(Math.max(0, m.clock));
+    const per = m.so ? 'SO' : m.period <= 3 ? ['1ST', '2ND', '3RD'][m.period - 1] : 'OT';
+    text(ctx, `${per} ${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}`, x + w / 2, y + 17, { color: '#9be7ff', align: 'center', shadow: null });
+  }
+
+  private drawGoalLights(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
+    for (const gi of [0, 1]) {
+      const sx = Math.round(projX(gi === 0 ? -5 : RINK_L + 5) - ox);
+      const sy = Math.round(projY(CY) - 32 - oy);
+      if (sx < -10 || sx > display.W + 10) continue;
+      ctx.fillStyle = '#3a3f5a';
+      ctx.fillRect(sx, sy + 4, 1, 10);
+      chunky(ctx, sx - 3, sy - 2, 7, 7, '#1b1e30');
+      const lit = this.lamp[gi] > 0 && Math.floor(this.lamp[gi] * 6) % 2 === 0;
+      if (lit) {
+        fillCircle(ctx, sx, sy + 1, 7, 'rgba(255,40,40,0.28)');
+        fillCircle(ctx, sx, sy + 1, 4, 'rgba(255,90,90,0.5)');
+      }
+      ctx.fillStyle = lit ? '#ff3030' : this.lamp[gi] > 0 ? '#c01818' : '#5a1414';
+      ctx.fillRect(sx - 2, sy - 1, 5, 4);
+      ctx.fillStyle = lit ? '#ffd0d0' : '#7a2a2a';
+      ctx.fillRect(sx - 1, sy - 1, 2, 1);
+    }
+  }
+
+  private drawReticle(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
+    const m = this.m;
+    const h = m.human;
+    if (h < 0 || !m.cfg.assist || m.state !== 'play' || !m.ctrl || m.puck.owner !== m.ctrl) return;
+    if (m.ax(h as Side, m.puck.x) < CX - 40) return;
+    const gx = m.oppGoalX(h as Side);
+    const g = m.goalies[1 - h];
+    const open = g.y < CY ? 1 : -1;
+    const ty = CY + open * (GOAL_HW - 4);
+    const sx = Math.round(projX(gx) - ox);
+    const sy = Math.round(projY(ty) - 7 - oy);
+    const r = 5 + Math.round((Math.sin(performance.now() / 120) + 1) * 1);
+    ellipseRing(ctx, sx, sy + 1, r, r, 'rgba(0,0,0,0.5)');
+    ellipseRing(ctx, sx, sy, r, r, UI.yellow);
+    ellipseRing(ctx, sx, sy, r - 1, r - 1, UI.yellow);
+    ctx.fillStyle = UI.yellow;
+    ctx.fillRect(sx - 1, sy - 1, 3, 3);
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) ctx.fillRect(sx + dx * (r + 2) - (dy ? 0 : dx < 0 ? 2 : 0), sy + dy * (r + 2) - (dx ? 0 : dy < 0 ? 2 : 0), dy ? 1 : 3, dy ? 3 : 1);
+    text(ctx, 'SHOOT!', sx, sy - r - 11, { color: UI.yellow, align: 'center', outline: '#12121c', shadow: null });
+  }
+
+  private drawThrown(ctx: CanvasRenderingContext2D, o: Thrown, ox: number, oy: number) {
+    const px = Math.round(projX(o.x) - ox);
+    const py = Math.round(projY(o.y) - oy);
+    const z = Math.round(o.z);
+    ctx.fillStyle = 'rgba(10,20,40,0.25)';
+    ctx.fillRect(px - 2, py, 5, 1);
+    const y = py - z;
+    if (o.kind === 'hat') {
+      ctx.fillStyle = '#111116';
+      ctx.fillRect(px - 3, y - 1, 7, 1);
+      ctx.fillStyle = o.color;
+      ctx.fillRect(px - 2, y - 4, 5, 3);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(px - 2, y - 4, 1, 1);
+    } else if (o.kind === 'octopus') {
+      ctx.fillStyle = '#7b3fa0';
+      ctx.fillRect(px - 2, y - 5, 5, 3);
+      ctx.fillRect(px - 3, y - 2, 7, 1);
+      for (let i = -3; i <= 3; i += 2) ctx.fillRect(px + i, y - 1, 1, 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(px - 1, y - 4, 1, 1);
+      ctx.fillRect(px + 1, y - 4, 1, 1);
+    } else {
+      ctx.fillStyle = '#8a8a96';
+      ctx.fillRect(px - 2, y - 3, 4, 2);
+      ctx.fillRect(px + 2, y - 3, 1, 1);
+      ctx.fillStyle = '#e8a0b0';
+      ctx.fillRect(px - 4, y - 2, 2, 1);
+      ctx.fillStyle = '#111';
+      ctx.fillRect(px + 1, y - 3, 1, 1);
+    }
+  }
+
+  private drawResurfacer(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
+    const st = this.m.state;
+    if (st !== 'intermission' && st !== 'periodEnd') return;
+    const wy = RINK_W - 22;
+    const x0 = Math.max(10, this.zam.trail);
+    const x1 = Math.min(RINK_L - 10, this.zam.x - 10);
+    if (x1 > x0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(Math.round(projX(x0) - ox), Math.round(projY(wy - 9) - oy), Math.round(x1 - x0), Math.round(18 * YS));
+    }
+    const px = Math.round(projX(this.zam.x) - ox);
+    const py = Math.round(projY(wy) - oy);
+    ctx.fillStyle = 'rgba(10,20,40,0.3)';
+    ctx.fillRect(px - 12, py, 24, 3);
+    chunky(ctx, px - 13, py - 6, 6, 6, '#8d93a8');
+    chunky(ctx, px - 8, py - 11, 20, 10, '#e9eef6');
+    ctx.fillStyle = '#2f55c8';
+    ctx.fillRect(px - 8, py - 5, 20, 2);
+    ctx.fillStyle = '#9fd0ff';
+    ctx.fillRect(px + 5, py - 15, 6, 5);
+    ctx.fillStyle = '#e9eef6';
+    ctx.fillRect(px + 4, py - 16, 8, 1);
+    ctx.fillStyle = '#f1c39a';
+    ctx.fillRect(px + 7, py - 14, 2, 2);
+    ctx.fillStyle = '#111116';
+    ctx.fillRect(px - 6, py - 1, 4, 2);
+    ctx.fillRect(px + 6, py - 1, 4, 2);
   }
 
   // ---------- HUD ----------

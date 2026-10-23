@@ -15,6 +15,8 @@ export class SettingsScene implements Scene {
   private rows: Row[] = [
     { label: 'PERIOD LENGTH', value: () => `${settings.periodMin} MIN`, change: (d) => { const i = PERIODS.indexOf(settings.periodMin); settings.periodMin = PERIODS[(i + d + PERIODS.length) % PERIODS.length]; } },
     { label: 'DIFFICULTY', value: () => DIFFICULTY_NAMES[settings.difficulty], change: (d) => { settings.difficulty = (settings.difficulty + d + 4) % 4; } },
+    { label: 'EASY CONTROLS', value: () => (settings.assist ? 'ON' : 'OFF'), change: () => { settings.assist = !settings.assist; } },
+    { label: 'AUTO SWITCH', value: () => (settings.autoSwitch ? 'ON' : 'OFF'), change: () => { settings.autoSwitch = !settings.autoSwitch; } },
     { label: 'OFFSIDE', value: () => (settings.offside ? 'ON' : 'OFF'), change: () => { settings.offside = !settings.offside; } },
     { label: 'ICING', value: () => (settings.icing ? 'ON' : 'OFF'), change: () => { settings.icing = !settings.icing; } },
     { label: 'PENALTIES', value: () => (settings.penalties ? 'ON' : 'OFF'), change: () => { settings.penalties = !settings.penalties; } },

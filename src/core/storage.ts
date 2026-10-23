@@ -42,18 +42,40 @@ export interface Settings {
   sound: boolean;
   music: boolean;
   shake: boolean;
+  assist: boolean;
+  autoSwitch: boolean;
+  v: number;
 }
 
-export const settings: Settings = load<Settings>('ph.settings', {
+export const SETTINGS_VERSION = 2;
+
+export const DEFAULT_SETTINGS: Settings = {
   periodMin: 3,
-  difficulty: 1,
-  offside: true,
-  icing: true,
+  difficulty: 0,
+  offside: false,
+  icing: false,
   penalties: true,
   sound: true,
   music: true,
   shake: true,
-});
+  assist: true,
+  autoSwitch: true,
+  v: SETTINGS_VERSION,
+};
+
+/** Upgrades saved settings from older versions; existing choices are kept. */
+export function migrateSettings(raw: Partial<Settings> | null): Settings {
+  if (!raw) return { ...DEFAULT_SETTINGS };
+  const s = { ...DEFAULT_SETTINGS, ...raw };
+  if (!raw.v || raw.v < 2) {
+    s.assist = true;
+    s.autoSwitch = true;
+  }
+  s.v = SETTINGS_VERSION;
+  return s;
+}
+
+export const settings: Settings = migrateSettings(loadRaw<Partial<Settings>>('ph.settings'));
 
 export function saveSettings() {
   save('ph.settings', settings);

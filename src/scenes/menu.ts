@@ -102,6 +102,8 @@ function matchCfg(home: Team, away: Team, human: 0 | 1, kind: 'exhibition' | 'se
     offside: settings.offside,
     icing: settings.icing,
     penalties: settings.penalties,
+    assist: settings.assist,
+    autoSwitch: settings.autoSwitch,
   };
 }
 

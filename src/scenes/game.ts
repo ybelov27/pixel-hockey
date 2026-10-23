@@ -1,12 +1,15 @@
 import { display } from '../core/display';
 import { input } from '../core/input';
 import { audio } from '../core/audio';
-import { rng } from '../core/rng';
-import { Match, events, type MatchConfig, type Side } from '../game/match';
+import { hashString, rng } from '../core/rng';
+import { Match, events, type MatchConfig } from '../game/match';
 import { GameRenderer } from '../render/gameRender';
 import { text } from '../render/font';
-import { button, Menu, panel, UI, type Rect } from '../render/ui';
+import { button, chunky, Menu, panel, UI, type Rect } from '../render/ui';
+import { loadRaw, save } from '../core/storage';
 import type { Scene } from './scene';
+
+const TIPS_KEY = 'ph.tips';
 
 export class GameScene implements Scene {
   m: Match;
@@ -47,9 +50,9 @@ export class GameScene implements Scene {
   private layoutTouch() {
     const { W, H, safe } = display;
     input.touchButtons = [
-      { id: 'b', x: W - safe.r - 30, y: H - safe.b - 30, r: 19 },
-      { id: 'a', x: W - safe.r - 73, y: H - safe.b - 21, r: 15 },
-      { id: 'c', x: W - safe.r - 25, y: H - safe.b - 73, r: 12 },
+      { id: 'b', x: W - safe.r - 32, y: H - safe.b - 32, r: 22 },
+      { id: 'a', x: W - safe.r - 80, y: H - safe.b - 23, r: 17 },
+      { id: 'c', x: W - safe.r - 27, y: H - safe.b - 81, r: 14 },
       { id: 'pause', x: W - safe.r - 13, y: safe.t + 10, r: 10 },
     ];
   }
@@ -115,17 +118,56 @@ export class GameScene implements Scene {
       this.r.handle(e);
       if (e.t === 'hit') audio.sfx('check');
       if (e.t === 'deke') audio.sfx('deke');
+      if (e.t === 'crossbar') audio.sfx('crossbar');
+      if (e.t === 'robbed') audio.sfx('ooh');
+      if (e.t === 'goal') {
+        // NHL tradition: the horn and goal song play only for the home team
+        if (e.side === 0) {
+          audio.sfx('horn');
+          audio.goalSong(hashString(m.teams[0].abbr + m.teams[0].name));
+        } else audio.sfx('groan');
+      }
     }
     m.events.length = 0;
-    // organ sting when the human team presses in the offensive zone
+    // the home crowd gets loud when its team presses in the offensive zone
     this.chargeT -= dt;
     const pk = m.puck;
-    if (this.chargeT <= 0 && m.state === 'play' && pk.owner && pk.owner.side === m.human && m.ax(m.human as Side, pk.x) > 400) {
-      audio.sfx('charge');
-      this.chargeT = 25 + rng.next() * 20;
+    if (this.chargeT <= 0 && m.state === 'play' && pk.owner && pk.owner.side === 0 && m.ax(0, pk.x) > 400) {
+      if (rng.next() < 0.5) {
+        audio.sfx('chant');
+        this.r.showJumbo(`LET'S GO ${m.teams[0].abbr}!`, m.teams[0].primary, 2.5);
+      } else {
+        audio.sfx('charge');
+        this.r.showJumbo('MAKE SOME NOISE!', '#e63946', 2.5);
+      }
+      this.chargeT = 22 + rng.next() * 18;
     }
+    this.updateTips(dt);
     const snap = m.state === 'replay' && m.replay.length ? m.replay[Math.floor(m.replayPos)] : m.snapshot();
     this.r.update(dt, snap);
+  }
+
+  private tip: { text: string; t: number } | null = null;
+
+  private updateTips(dt: number) {
+    const m = this.m;
+    if (this.tip) {
+      this.tip.t -= dt;
+      if (this.tip.t <= 0) this.tip = null;
+      return;
+    }
+    if (m.human < 0 || m.state !== 'play') return;
+    const seen = loadRaw<Record<string, boolean>>(TIPS_KEY) || {};
+    const pk = m.puck;
+    const show = (key: string, text: string) => {
+      if (seen[key]) return;
+      seen[key] = true;
+      save(TIPS_KEY, seen);
+      this.tip = { text, t: 4.5 };
+    };
+    const touch = input.touchMode;
+    if (pk.owner && pk.owner === m.ctrl) show('puck', touch ? 'TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT' : 'K = SHOOT (HOLD FOR SLAPSHOT)  J = PASS');
+    else if (pk.owner && pk.owner.side !== m.human) show('defend', touch ? 'CHECK OR POKE TO STEAL - SWITCH CHANGES PLAYER' : 'K = CHECK  L = POKE  J = SWITCH PLAYER');
   }
 
   private sounds() {
@@ -136,7 +178,6 @@ export class GameScene implements Scene {
     if (events.board) audio.sfx('board', events.board);
     if (events.post) audio.sfx('post');
     if (events.save) audio.sfx('save');
-    if (events.goal) audio.sfx('horn');
     if (events.whistle) audio.sfx('whistle');
     if (events.buzzer) audio.sfx('buzzer');
     events.reset();
@@ -164,6 +205,13 @@ export class GameScene implements Scene {
     if (m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt') this.r.playerTag(ctx);
     if (input.touchMode && (m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt') && !this.paused) this.r.touchControls(ctx);
     this.r.banner(ctx);
+    if (this.tip && m.state === 'play') {
+      const w = Math.min(W - 20, this.tip.text.length * 6 + 12);
+      const x = Math.round(W / 2 - w / 2);
+      const y = Math.round(H * 0.24);
+      chunky(ctx, x, y, w, 13, 'rgba(10,12,30,0.8)');
+      text(ctx, this.tip.text, W / 2, y + 3, { color: UI.yellow, align: 'center', shadow: null });
+    }
     if (m.state === 'faceoff' && m.human >= 0 && m.stateT > 0.3) {
       text(ctx, input.touchMode ? 'TAP PASS OR SHOOT WHEN THE PUCK DROPS' : 'PRESS PASS/SHOOT ON THE DROP', W / 2, H * 0.62, {
         color: '#fff', align: 'center', outline: '#12121c', shadow: null,
