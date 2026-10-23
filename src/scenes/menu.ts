@@ -5,7 +5,7 @@ import { loadRaw, settings } from '../core/storage';
 import { text } from '../render/font';
 import { button, Menu, type Rect } from '../render/ui';
 import type { Season } from '../game/league';
-import { teamByAbbr, type Team } from '../data/teams';
+import { TEAMS, teamByAbbr, type Team } from '../data/teams';
 import { attractDraw, attractStep } from './attract';
 import { drawLogo, TitleScene } from './title';
 import { scenes, type Scene } from './scene';
@@ -37,8 +37,9 @@ export class MainMenu implements Scene {
       { label: 'PLAY NOW', sub: 'QUICK GAME', color: '#e63946', act: () => quickGame() },
       { label: 'SEASON', sub: seasonSub, color: '#f4a236', act: () => this.openSeason() },
       { label: 'SHOOTOUT', sub: 'SUDDEN DRAMA', color: '#3a86ff', act: () => shootoutGame() },
+      { label: 'PRACTICE', sub: 'SHOOTING & ONE-TIMERS', color: '#2a9d8f', act: () => practiceGame() },
       { label: 'SETTINGS', color: '#4a557f', act: () => scenes.go(new SettingsScene(() => scenes.go(new MainMenu()))) },
-      { label: 'HOW TO PLAY', color: '#4a557f', act: () => scenes.go(new HelpScene(() => scenes.go(new MainMenu()))) },
+      { label: 'HELP', color: '#4a557f', act: () => scenes.go(new HelpScene(() => scenes.go(new MainMenu()))) },
     ];
   }
 
@@ -54,20 +55,21 @@ export class MainMenu implements Scene {
     const { W, H } = display;
     const logoScale = 2;
     const top = Math.round(H * 0.07) + 7 * logoScale * 2 + logoScale * 2 + 14;
-    const bigH = 24;
     const smallH = 15;
-    const gap = 5;
+    const gap = 4;
+    const avail = H - top - 14;
+    const bigH = Math.max(18, Math.min(24, Math.floor((avail - smallH - 4 * gap) / 4)));
     const w = Math.min(190, W - 40);
+    const x = Math.round(W / 2 - w / 2);
     const rects: Rect[] = [];
     let y = top;
-    const avail = H - top - 18;
-    const need = 3 * (bigH + gap) + 2 * (smallH + gap);
-    const g = need > avail ? 3 : gap;
-    for (let i = 0; i < 5; i++) {
-      const h = i < 3 ? bigH : smallH;
-      rects.push({ x: Math.round(W / 2 - w / 2), y, w, h });
-      y += h + g;
+    for (let i = 0; i < 4; i++) {
+      rects.push({ x, y, w, h: bigH });
+      y += bigH + gap;
     }
+    const half = Math.floor((w - gap) / 2);
+    rects.push({ x, y, w: half, h: smallH });
+    rects.push({ x: x + w - half, y, w: half, h: smallH });
     return rects;
   }
 
@@ -88,13 +90,13 @@ export class MainMenu implements Scene {
     rects.forEach((r, i) => {
       const it = this.labels[i];
       if (!it) return;
-      button(ctx, r, it.label, { color: it.color, selected: this.menu.sel === i, sub: i < 3 ? it.sub : undefined });
+      button(ctx, r, it.label, { color: it.color, selected: this.menu.sel === i, sub: i < 4 ? it.sub : undefined });
     });
     text(ctx, 'V1.0', W - safe.r - 4, H - safe.b - 9, { color: 'rgba(255,255,255,0.4)', align: 'right', shadow: null });
   }
 }
 
-function matchCfg(home: Team, away: Team, human: 0 | 1, kind: 'exhibition' | 'season' | 'playoff' | 'shootout') {
+function matchCfg(home: Team, away: Team, human: 0 | 1, kind: 'exhibition' | 'season' | 'playoff' | 'shootout' | 'practice') {
   return {
     home, away, human, kind,
     periodSec: settings.periodMin * 60,
@@ -121,6 +123,19 @@ export function quickGame() {
           );
         }, back),
       );
+    }, back),
+  );
+}
+
+export function practiceGame() {
+  const back = () => scenes.go(new MainMenu());
+  scenes.go(
+    new TeamSelectScene('PRACTICE: PICK YOUR TEAM', null, (you) => {
+      // a random opponent supplies the practice goalie
+      const others = TEAMS.filter((t) => t.abbr !== you.abbr);
+      const opp = others[Math.floor(Math.random() * others.length)];
+      const cfg = { ...matchCfg(you, opp, 0, 'practice'), offside: false, icing: false, penalties: false };
+      scenes.go(new GameScene(cfg, back, back));
     }, back),
   );
 }

@@ -43,6 +43,10 @@ export function aiThink(m: Match, s: Skater, dt: number) {
     shootoutAI(m, s);
     return;
   }
+  if (m.practice) {
+    practiceAI(m, s, dt);
+    return;
+  }
   const pk = m.puck;
   if (pk.owner === s) {
     carrier(m, s, dt);
@@ -65,7 +69,7 @@ function receive(m: Match, s: Skater) {
   s.tx = pk.x + pk.vx * t;
   s.ty = pk.y + pk.vy * t;
   const a = m.ax(s.side, s.x);
-  if (a > 470 && Math.abs(s.y - CY) < 45 && s.oneTimer <= 0 && rng.next() < 0.02 + level(m, s) * 0.006) s.oneTimer = 0.5;
+  if (!m.practice && a > 470 && Math.abs(s.y - CY) < 45 && s.oneTimer <= 0 && rng.next() < 0.02 + level(m, s) * 0.006) s.oneTimer = 0.5;
 }
 
 function support(m: Match, s: Skater) {
@@ -315,6 +319,35 @@ function carryTarget(m: Match, s: Skater, a: number, opp: Skater[]) {
   }
   s.tx = tx;
   s.ty = clamp(ty, 15, RINK_W - 15);
+}
+
+/** Practice teammate: gets open in the slot and returns every pass for one-timers. */
+function practiceAI(m: Match, s: Skater, dt: number) {
+  const pk = m.puck;
+  const me = m.ctrl;
+  if (pk.owner === s) {
+    s.wait += dt;
+    s.tx = s.x;
+    s.ty = s.y;
+    if (me && (s.wait > 0.45 || m.passCall > 0)) {
+      m.doPass(s, me);
+      m.passCall = 0;
+      s.wait = 0;
+    }
+  } else {
+    s.wait = 0;
+    if (!pk.owner && !pk.gOwner && pk.passTarget === s) receive(m, s);
+    else {
+      const side = me && me.y < CY ? 1 : -1;
+      s.tx = m.wx(0, 505);
+      s.ty = CY + side * 45;
+      if (!pk.owner && !pk.gOwner && pk.speed < 140 && Math.hypot(pk.x - s.x, pk.y - s.y) < 50) {
+        s.tx = pk.x;
+        s.ty = pk.y;
+      }
+    }
+  }
+  steer(s);
 }
 
 function shootoutAI(m: Match, s: Skater) {

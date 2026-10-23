@@ -57,15 +57,33 @@ export class GameScene implements Scene {
     ];
   }
 
+  private pauseItems(): { label: string; color: string; act: () => void }[] {
+    const m = this.m;
+    const items: { label: string; color: string; act: () => void }[] = [
+      { label: 'RESUME', color: UI.green, act: () => { this.paused = false; } },
+    ];
+    if (m.practice) {
+      items.push({
+        label: m.practiceGoalie ? 'GOALIE: ON' : 'GOALIE: OFF',
+        color: '#2a9d8f',
+        act: () => {
+          m.practiceGoalie = !m.practiceGoalie;
+          m.practiceReset();
+        },
+      });
+      items.push({ label: 'NEW PUCK', color: '#3a86ff', act: () => { m.practiceReset(); this.paused = false; } });
+    }
+    items.push({ label: m.practice ? 'END PRACTICE' : 'QUIT GAME', color: '#6a4c93', act: () => this.onQuit() });
+    return items;
+  }
+
   private pauseRects(): Rect[] {
     const { W, H } = display;
     const w = 130;
+    const n = this.pauseItems().length;
     const x = Math.round(W / 2 - w / 2);
-    const y = Math.round(H / 2 - 10);
-    return [
-      { x, y, w, h: 20 },
-      { x, y: y + 26, w, h: 18 },
-    ];
+    const y = Math.round(H / 2 - 10 - (n - 2) * 12);
+    return Array.from({ length: n }, (_, i) => ({ x, y: y + i * 24, w, h: 19 }));
   }
 
   private panelButton(): Rect {
@@ -89,8 +107,7 @@ export class GameScene implements Scene {
     if (this.paused) {
       this.pauseMenu.items = this.pauseRects().map((r) => ({ r }));
       const i = this.pauseMenu.update();
-      if (i === 0) this.paused = false;
-      if (i === 1) this.onQuit();
+      if (i >= 0) this.pauseItems()[i].act();
       return;
     }
     if (m.state === 'goal' || m.state === 'replay') {
@@ -223,10 +240,9 @@ export class GameScene implements Scene {
     if (this.paused) {
       ctx.fillStyle = 'rgba(8,10,24,0.7)';
       ctx.fillRect(0, 0, W, H);
-      text(ctx, 'PAUSED', W / 2, H / 2 - 40, { scale: 3, color: '#fff', align: 'center', outline: '#12121c' });
       const rs = this.pauseRects();
-      button(ctx, rs[0], 'RESUME', { color: UI.green, selected: this.pauseMenu.sel === 0 });
-      button(ctx, rs[1], 'QUIT GAME', { color: '#6a4c93', selected: this.pauseMenu.sel === 1 });
+      text(ctx, 'PAUSED', W / 2, rs[0].y - 30, { scale: 3, color: '#fff', align: 'center', outline: '#12121c' });
+      this.pauseItems().forEach((it, i) => button(ctx, rs[i], it.label, { color: it.color, selected: this.pauseMenu.sel === i }));
     }
   }
 

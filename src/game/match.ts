@@ -12,7 +12,7 @@ import { aiThink, goalieThink } from './ai';
 export type Side = 0 | 1;
 export type Role = 'C' | 'LW' | 'RW' | 'LD' | 'RD';
 export const ROLES: Role[] = ['C', 'LW', 'RW', 'LD', 'RD'];
-export type MatchKind = 'exhibition' | 'season' | 'playoff' | 'attract' | 'shootout';
+export type MatchKind = 'exhibition' | 'season' | 'playoff' | 'attract' | 'shootout' | 'practice';
 
 export interface MatchConfig {
   home: Team;
@@ -279,6 +279,9 @@ export class Match {
     if (cfg.kind === 'shootout') {
       this.state = 'soIntro';
       this.startShootout();
+    } else if (cfg.kind === 'practice') {
+      this.practiceReset();
+      this.setBanner('PRACTICE', 'SHOOT, PASS & ONE-TIMERS', '#2a9d8f', 1.8, true);
     } else {
       this.setBanner('PERIOD 1', `${cfg.away.abbr} AT ${cfg.home.abbr}`, '#1d3557', 1.6, true);
       this.placeForFaceoff(CENTER_DOT);
@@ -357,6 +360,10 @@ export class Match {
         break;
       case 'stoppage':
         this.glide(dt);
+        if (this.practice && this.stateT > 0.9) {
+          this.practiceReset();
+          break;
+        }
         if (this.stateT > 1.5) {
           this.assessDelayed();
           this.beginFaceoff(this.pendingDot);
@@ -364,6 +371,13 @@ export class Match {
         break;
       case 'goal':
         this.celebrate(dt);
+        if (this.practice) {
+          if (this.stateT > 1.8 || (this.skip && this.stateT > 0.5)) {
+            this.skip = false;
+            this.practiceReset();
+          }
+          break;
+        }
         if (this.stateT < 1) this.record();
         if (this.stateT > 2.8 || (this.skip && this.stateT > 0.8)) {
           this.skip = false;
@@ -537,6 +551,10 @@ export class Match {
   private updatePlay(dt: number, inp: PadInput | null) {
     this.time += dt;
     const so = this.state === 'soAttempt';
+    if (this.practice) {
+      this.practiceTick(dt, inp);
+      return;
+    }
     if (!so) {
       this.clock -= dt;
       if (this.refPos) {
@@ -608,14 +626,14 @@ export class Match {
     if (!c) return;
     const pk = this.puck;
     const oppHas = (pk.owner && pk.owner.side !== h) || (pk.gOwner && pk.gOwner.side !== h);
-    if (oppHas && Math.hypot(c.x - pk.x, c.y - pk.y) > 150) {
+    if (oppHas && !this.practice && Math.hypot(c.x - pk.x, c.y - pk.y) > 150) {
       const n = this.closestTo(h, pk.x, pk.y);
       if (n) c = this.ctrl = n;
     }
     // auto-switch on defense, with hysteresis so control never flickers
     this.switchT -= dt;
     const teamHas = (pk.owner && pk.owner.side === h) || (pk.gOwner && pk.gOwner.side === h);
-    if (this.cfg.autoSwitch && !teamHas && pk.passTarget !== c && this.switchT <= 0) {
+    if (this.cfg.autoSwitch && !this.practice && !teamHas && pk.passTarget !== c && this.switchT <= 0) {
       const n = this.closestTo(h, pk.x, pk.y);
       if (n && n !== c) {
         const dc = Math.hypot(c.x - pk.x, c.y - pk.y);
@@ -653,8 +671,11 @@ export class Match {
       if (incoming && inp.b.pressed) {
         c.oneTimer = 0.6;
       } else if (inp.a.pressed) {
-        const n = this.closestTo(h, pk.x, pk.y, c);
-        if (n) this.ctrl = n;
+        if (this.practice) this.passCall = 0.6;
+        else {
+          const n = this.closestTo(h, pk.x, pk.y, c);
+          if (n) this.ctrl = n;
+        }
       } else if (inp.b.pressed) {
         this.doCheck(c);
       }
@@ -739,7 +760,7 @@ export class Match {
     pk.vz = d0 > 160 ? 45 : 0;
     pk.passTarget = t;
     pk.shot = null;
-    if (this.human === c.side) this.ctrl = t;
+    if (this.human === c.side && !this.practice) this.ctrl = t;
     this.emit('shot', pk.x, pk.y);
     events.pass = true;
   }
@@ -1046,7 +1067,7 @@ export class Match {
     pk.lastSide = k.side;
     k.lastPuck = this.time;
     this.touch(k);
-    if (this.human === k.side && this.state === 'play') this.ctrl = k;
+    if (this.human === k.side && this.state === 'play' && !this.practice) this.ctrl = k;
     if (this.delayed && this.delayed.sk.side === k.side) this.whistle('PENALTY', this.penaltyDot(this.delayed.sk.side));
   }
 
@@ -1474,7 +1495,8 @@ export class Match {
     if (this.delayed) {
       const k = this.delayed.sk;
       this.setBanner(this.delayed.name, `${this.teams[k.side].abbr} #${k.p.number} ${k.p.name}`, '#e85d04', 1.5);
-    } else this.setBanner(reason, '', reason === 'FROZEN' ? '#2a6f97' : '#6a040f', 1.3);
+    } else if (this.practice) this.setBanner('SAVE!', 'NEW PUCK COMING', '#2a6f97', 0.9);
+    else this.setBanner(reason, '', reason === 'FROZEN' ? '#2a6f97' : '#6a040f', 1.3);
   }
 
   private glide(dt: number) {
@@ -1638,6 +1660,85 @@ export class Match {
     this.state = 'intro';
     this.stateT = 0;
     this.placeForFaceoff(CENTER_DOT);
+  }
+
+  // ---------- practice ----------
+  get practice() {
+    return this.cfg.kind === 'practice';
+  }
+
+  /** Goalie in net during practice (toggle from the pause menu). */
+  practiceGoalie = true;
+  /** Seconds left on the player's call for a pass (practice). */
+  passCall = 0;
+  private idleT = 0;
+
+  /** Fresh puck on your stick at the top of the zone; passer and goalie back in place. */
+  practiceReset() {
+    this.dir = [1, -1];
+    for (const side of [0, 1] as Side[]) for (const k of this.skaters[side]) k.benched = !(side === 0 && (k.role === 'C' || k.role === 'RW'));
+    const c = this.skaters[0][0];
+    const passer = this.skaters[0][2];
+    for (const k of [c, passer]) {
+      k.vx = k.vy = 0;
+      k.down = 0;
+      k.charge = -1;
+      k.celebrate = false;
+      k.lunge = 0;
+      k.oneTimer = 0;
+      k.p.stamina = 100;
+    }
+    c.x = 330;
+    c.y = CY + rng.range(-40, 40);
+    c.face = 0;
+    passer.x = 500;
+    passer.y = c.y < CY ? CY + 45 : CY - 45;
+    passer.face = Math.PI;
+    this.goalies[0].active = false;
+    const g = this.goalies[1];
+    g.active = this.practiceGoalie;
+    g.x = this.goalX(1) - 6;
+    g.y = CY;
+    g.vx = g.vy = 0;
+    g.hold = 0;
+    g.pose = 'stance';
+    const pk = this.puck;
+    pk.owner = null;
+    pk.gOwner = null;
+    pk.shot = null;
+    pk.passTarget = null;
+    pk.ice = null;
+    pk.z = pk.vz = 0;
+    this.goalFrame = -1;
+    this.refPos = null;
+    this.idleT = 0;
+    this.state = 'play';
+    this.stateT = 0;
+    this.possess(c);
+    this.ctrl = c;
+  }
+
+  private practiceTick(dt: number, inp: PadInput | null) {
+    this.passCall = Math.max(0, this.passCall - dt);
+    const c = this.skaters[0][0];
+    this.ctrl = c;
+    if (inp) this.humanControl(dt, inp);
+    this.ctrl = c;
+    for (const k of this.all()) if (k !== c) aiThink(this, k, dt);
+    for (const g of this.goalies) if (g.active) goalieThink(this, g, dt, null);
+    for (const k of this.all()) this.moveSkater(k, dt);
+    this.collide();
+    this.updatePuck(dt);
+    if (this.state !== 'play') return;
+    // a dead puck nobody is chasing gets replaced
+    const pk = this.puck;
+    const near = this.all().some((k) => Math.hypot(k.x - pk.x, k.y - pk.y) < 45);
+    this.idleT = !pk.owner && !pk.gOwner && (!near || pk.speed < 5) ? this.idleT + dt : 0;
+    if (this.idleT > 2.5) this.practiceReset();
+  }
+
+  get barDowns() {
+    return this.goals.filter((g) => g.tag.includes('BAR DOWN')).length;
   }
 
   // ---------- shootout ----------

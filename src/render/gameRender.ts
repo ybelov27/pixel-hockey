@@ -527,6 +527,11 @@ export class GameRenderer {
       text(ctx, j.text, x + w / 2, y + 10, { color: '#ffffff', align: 'center', outline: '#05060c', shadow: null });
       return;
     }
+    if (m.practice) {
+      text(ctx, 'PRACTICE', x + w / 2, y + 6, { color: '#2ec4b6', align: 'center', shadow: null });
+      text(ctx, `GOALS ${m.score[0]}`, x + w / 2, y + 17, { color: '#ffd23f', align: 'center', shadow: null });
+      return;
+    }
     const box = (side: Side, bx: number) => {
       const t = m.teams[side];
       ctx.fillStyle = t.primary;
@@ -647,9 +652,14 @@ export class GameRenderer {
   // ---------- HUD ----------
   hud(ctx: CanvasRenderingContext2D) {
     const m = this.m;
-    const { W, safe } = display;
+    const { safe } = display;
     const x0 = safe.l + 4;
     const y0 = safe.t + 3;
+    if (m.practice) {
+      this.practiceHud(ctx, x0, y0);
+      this.pauseButton(ctx);
+      return;
+    }
     let x = x0;
     const box = (team: Side, score: number) => {
       const t = m.teams[team];
@@ -702,7 +712,39 @@ export class GameRenderer {
         }
       }
     }
-    // pause button
+    this.pauseButton(ctx);
+  }
+
+  private practiceHud(ctx: CanvasRenderingContext2D, x0: number, y0: number) {
+    const m = this.m;
+    const goals = m.score[0];
+    const shots = m.shots[0];
+    const pct = shots ? Math.round((goals / shots) * 100) : 0;
+    const items: [string, string][] = [
+      ['GOALS', String(goals)],
+      ['SOG', String(shots)],
+      ['BAR DOWN', String(m.barDowns)],
+      ['PCT', `${pct}%`],
+    ];
+    let x = x0;
+    chunky(ctx, x, y0, 58, 11, '#2a9d8f');
+    text(ctx, 'PRACTICE', x + 29, y0 + 2, { color: '#fff', align: 'center', shadow: null });
+    x += 60;
+    for (const [k, v] of items) {
+      const w = textWidth(k) + textWidth(v) + 10;
+      chunky(ctx, x, y0, w, 11, '#0d0f1e');
+      text(ctx, k, x + 3, y0 + 2, { color: UI.dim, shadow: null });
+      text(ctx, v, x + w - 3, y0 + 2, { color: k === 'BAR DOWN' ? UI.yellow : '#fff', align: 'right', shadow: null });
+      x += w + 2;
+    }
+    if (!m.practiceGoalie) {
+      chunky(ctx, x0, y0 + 13, 70, 10, '#6a4c93');
+      text(ctx, 'EMPTY NET', x0 + 35, y0 + 15, { color: '#fff', align: 'center', shadow: null });
+    }
+  }
+
+  private pauseButton(ctx: CanvasRenderingContext2D) {
+    const { W, safe } = display;
     const pbx = W - safe.r - 13;
     const pby = safe.t + 10;
     fillCircle(ctx, pbx, pby, 8, 'rgba(0,0,0,0.45)');
@@ -776,7 +818,13 @@ export class GameRenderer {
     const pk = m.puck;
     const offense = (pk.owner && pk.owner.side === h) || (!pk.owner && pk.passTarget?.side === h) || m.state === 'faceoff';
     const labels: Record<string, string> =
-      m.state === 'faceoff' ? { a: 'DRAW', b: 'DRAW', c: '' } : offense ? { a: 'PASS', b: 'SHOOT', c: 'DEKE' } : { a: 'SWITCH', b: 'CHECK', c: 'POKE' };
+      m.state === 'faceoff'
+        ? { a: 'DRAW', b: 'DRAW', c: '' }
+        : offense && !(m.practice && pk.owner !== m.ctrl)
+          ? { a: 'PASS', b: 'SHOOT', c: 'DEKE' }
+          : m.practice
+            ? { a: 'CALL', b: 'SHOOT', c: 'POKE' }
+            : { a: 'SWITCH', b: 'CHECK', c: 'POKE' };
     const colors: Record<string, string> = { a: '#3a86ff', b: '#e63946', c: '#f4a236' };
     for (const b of input.touchButtons) {
       if (b.id === 'pause') continue;
