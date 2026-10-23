@@ -62,13 +62,13 @@ const KEYMAP: Record<string, string[]> = {
   down: ['ArrowDown', 'KeyS'],
   left: ['ArrowLeft', 'KeyA'],
   right: ['ArrowRight', 'KeyD'],
-  a: ['KeyJ', 'KeyZ'],
-  b: ['KeyK', 'KeyX', 'Space'],
+  a: ['Space', 'KeyJ', 'KeyZ'],
+  b: ['KeyK', 'KeyX'],
   c: ['KeyL', 'KeyC'],
   sprint: ['ShiftLeft', 'ShiftRight'],
   start: ['Escape', 'KeyP'],
   confirm: ['Enter', 'Space', 'KeyZ', 'KeyJ'],
-  back: ['Escape', 'Backspace'],
+  back: ['Escape'],
 };
 
 class Input {
@@ -88,6 +88,9 @@ class Input {
   sprint = false;
   taps: { x: number; y: number }[] = [];
   private pendingTaps: { x: number; y: number }[] = [];
+  /** Characters typed this frame (uppercase; '\b' for backspace). */
+  typed: string[] = [];
+  private pendingTyped: string[] = [];
 
   /** True once any touch happened: show on-screen controls. */
   touchMode = false;
@@ -105,6 +108,9 @@ class Input {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Backspace'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
       audio.unlock();
+      if (e.key.length === 1) this.pendingTyped.push(e.key.toUpperCase());
+      else if (e.key === 'Backspace') this.pendingTyped.push('\b');
+      else if (e.key === 'Enter') this.pendingTyped.push('\r');
       this.setKey(e.code, true);
     });
     window.addEventListener('keyup', (e) => this.setKey(e.code, false));
@@ -271,12 +277,15 @@ class Input {
     this.sprint = sprint;
     this.taps = this.pendingTaps;
     this.pendingTaps = [];
+    this.typed = this.pendingTyped;
+    this.pendingTyped = [];
   }
 
   /** After the first fixed-step update in a frame, edges must not repeat. */
   clearEdges() {
     for (const b of [this.up, this.down, this.left, this.right, this.a, this.b, this.c, this.sprintBtn, this.start, this.confirm, this.back]) b.clearEdges();
     this.taps = [];
+    this.typed = [];
   }
 
   /** Drop any held touch roles (e.g. when switching scenes). */

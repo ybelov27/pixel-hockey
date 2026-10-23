@@ -17,8 +17,8 @@ Hold the device in landscape. In portrait the game asks you to rotate.
 | | Touch | Keyboard | Gamepad |
 |---|---|---|---|
 | Skate | Drag on the left half (push fully to sprint) | Arrows / WASD, Shift to sprint | Left stick, RT to sprint |
-| Pass / Switch player | PASS / SWITCH | J or Z | A |
-| Shoot (tap = wrist, hold = slap) / Body check | SHOOT / CHECK | K, X or Space | X or B |
+| Pass / Switch player | PASS / SWITCH | Space, J or Z | A |
+| Shoot (tap = wrist, hold = slap) / Body check | SHOOT / CHECK | K or X | X or B |
 | Deke / Poke check | DEKE / POKE | L or C | Y |
 | Pause | II button | Esc or P | Start |
 
@@ -36,6 +36,8 @@ Hold the device in landscape. In portrait the game asks you to rotate.
 - **Goalies:** they play the angle, react to shots, give up rebounds, and freeze or pass the puck.
 - **CPU difficulty:** four levels (Rookie, Pro, All-Star, Legend).
 - **Practice mode:** skate in alone on a goalie (or an empty net) with no clock. A teammate returns every pass for one-timer practice; press PASS without the puck to call for it. A fresh puck arrives after every goal or save, and a tracker shows goals, shots on goal, bar downs and shooting %.
+- **Online 1v1:** play a friend over the internet. One player taps **ONLINE 1V1 > CREATE ROOM** and shares the 5-letter code; the other taps **JOIN ROOM** and types it in. Each player controls their own team. The game runs on the host's device and streams to the guest over a direct peer-to-peer WebRTC connection. PeerJS's free public server only introduces the two devices, so the game needs no server of its own. Very strict networks (some schools and offices) can block peer-to-peer connections.
+- **Fights:** every penalty is followed by a fight you control. SHOOT punches, DEKE throws an uppercut, and holding PASS blocks. Win by knockout or have more health when the linesmen step in after 15 seconds; the losing team is rattled (loses stamina). There are at most 2 penalties, and so at most 2 fights, per game.
 - **Season mode:** choose 10, 20, 41 or 82 games. Standings use NHL points, and the playoffs follow the NHL format (top 3 per division plus 2 wild cards per conference) with best-of-1, 3, 5 or 7 series, ending with the Pixel Cup.
 - **Easy Controls** (on by default): shots aim at the open corner, marked by a yellow SHOOT target on the net. Passes have no aim error, the puck is better protected, the defender nearest the puck is selected automatically, and first-time tips explain the controls. New players start on Rookie with icing off; every assist and rule can be changed in Settings.
 - **Hockey moments:** BAR DOWN goals off the crossbar (any slap shot you charge past the halfway mark on the power meter is a guaranteed bar down, and 80% of other goals ring in off the bar too, with a metallic "ting", the net snapping and the crowd erupting), post-and-in goals, goal labels (top shelf, five hole, one-timer, shorty and more), slap-shot speed in MPH, "ROBBED!" saves, and hat tricks with hats thrown on the ice. Home goals in Detroit bring an octopus and in Florida bring plastic rats.

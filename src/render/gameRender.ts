@@ -4,6 +4,9 @@ import {
 } from '../game/rink';
 import { buildArena, type ArenaArt } from './arena';
 import { G_AX, G_AY, REF_KIT, SK_AX, SK_AY, goalieSprite, kitFor, skaterSprite, type Kit, type View } from './sprites';
+
+const PUNCH_HIT_T = 0.12;
+const UPPER_HIT_T = 0.32;
 import { text, textWidth } from './font';
 import { bar, chunky, ellipseRing, fillCircle, UI } from './ui';
 import { bestOn, rgba, shade } from './colors';
@@ -58,6 +61,8 @@ export class GameRenderer {
   private hype = 0;
   private netRipple: [number, number] = [0, 0];
   private first = true;
+  /** Which side the local player is on (online guests view as side 1). */
+  viewer: Side;
   private thrown: Thrown[] = [];
   private lamp: [number, number] = [0, 0];
   private jumbo: { text: string; color: string; t: number } | null = null;
@@ -65,10 +70,12 @@ export class GameRenderer {
   private flashRate = 1;
   private lastState = '';
   private zam = { x: -60, lane: 0, trail: 0 };
+  private punchFx: { side: Side; kind: number; t: number } | null = null;
 
   constructor(private m: Match) {
     this.arena = buildArena(m.teams[0], m.teams[1]);
     this.kits = [kitFor(m.teams[0], true), kitFor(m.teams[1], false)];
+    this.viewer = m.human >= 0 ? (m.human as Side) : 0;
   }
 
   handle(e: MatchEvent) {
@@ -130,6 +137,15 @@ export class GameRenderer {
         break;
       case 'mph':
         this.pops.push({ x, y: y - 28, text: `${e.value} MPH`, color: '#ffd23f', life: 0.9 });
+        break;
+      case 'punch':
+        this.punchFx = { side: e.side ?? 0, kind: e.value ?? 1, t: 0.3 };
+        if ((e.value ?? 0) > 0 && settings.shake) this.shake = Math.max(this.shake, e.value === 2 ? 4 : 2);
+        this.hype = Math.max(this.hype, 1);
+        break;
+      case 'fightEnd':
+        this.hype = 3;
+        this.flashRate = 8;
         break;
       case 'hattrick': {
         this.showJumbo('HAT TRICK!', '#ffd23f', 4);
@@ -207,6 +223,11 @@ export class GameRenderer {
     }
     this.netRipple[0] = Math.max(0, this.netRipple[0] - dt);
     this.netRipple[1] = Math.max(0, this.netRipple[1] - dt);
+    if (this.punchFx) {
+      this.punchFx.t -= dt;
+      if (this.punchFx.t <= 0) this.punchFx = null;
+    }
+    if (this.m.state === 'fight' && this.lastState !== 'fight') this.hype = 4;
     this.lamp[0] = Math.max(0, this.lamp[0] - dt);
     this.lamp[1] = Math.max(0, this.lamp[1] - dt);
     if (this.jumbo) {
@@ -332,7 +353,7 @@ export class GameRenderer {
     for (const p of this.pops) text(ctx, p.text, p.x - ox, p.y - oy, { color: p.color, align: 'center', outline: '#12121c', shadow: null });
 
     // off-screen arrow for the controlled player
-    const me = snap.sk.find((s) => s.ctrl);
+    const me = snap.sk.find((s) => s.ctrl && s.side === this.viewer);
     if (me) {
       const px = projX(me.x) - ox;
       const py = projY(me.y) - oy;
@@ -362,9 +383,12 @@ export class GameRenderer {
     const frame = s.speed < 8 ? 1 : Math.floor(s.anim / 7) % 4;
     ctx.fillStyle = 'rgba(10,20,40,0.25)';
     ctx.fillRect(px - 4, py - 1, 9, 3);
+    // your skater gets a yellow ring; an online opponent's gets a cyan one
+    const mine = s.ctrl && s.side === this.viewer;
+    const ringCol = mine ? UI.yellow : '#4cc9f0';
     if (s.ctrl) {
-      ellipseRing(ctx, px, py, 7, 3, UI.yellow);
-      ellipseRing(ctx, px, py + 1, 7, 3, shade(UI.yellow, 0.6));
+      ellipseRing(ctx, px, py, 7, 3, ringCol);
+      ellipseRing(ctx, px, py + 1, 7, 3, shade(ringCol, 0.6));
     }
     const sprite = skaterSprite(kit, view, flip, frame, pose, s.number);
     const handX = view === 'side' ? px + (flip ? -3 : 3) : view === 'front' ? px + 5 : px - 5;
@@ -375,11 +399,11 @@ export class GameRenderer {
     if (!s.down && !s.celebrate && view !== 'back') this.drawStick(ctx, s, handX, handY, ox, oy);
     if (s.ctrl) {
       const bob = Math.round(Math.sin(performance.now() / 150));
-      ctx.fillStyle = UI.yellow;
+      ctx.fillStyle = ringCol;
       ctx.fillRect(px - 2, py - 26 + bob, 5, 1);
       ctx.fillRect(px - 1, py - 25 + bob, 3, 1);
       ctx.fillRect(px, py - 24 + bob, 1, 1);
-      if (s.charge > 0.05) {
+      if (mine && s.charge > 0.05) {
         // same power curve as the engine; past the halfway tick it is a guaranteed bar down
         const full = this.m.chargeFull;
         const v = Math.max(0, Math.min(1, (s.charge - 0.18) / (full - 0.18)));
@@ -575,8 +599,9 @@ export class GameRenderer {
 
   private drawReticle(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
     const m = this.m;
-    const h = m.human;
-    if (h < 0 || !m.cfg.assist || m.state !== 'play' || !m.ctrl || m.puck.owner !== m.ctrl) return;
+    const h = this.viewer;
+    const me = m.ctrlOf(h);
+    if (m.human < 0 || !m.cfg.assist || m.state !== 'play' || !me || m.puck.owner !== me) return;
     if (m.ax(h as Side, m.puck.x) < CX - 40) return;
     const gx = m.oppGoalX(h as Side);
     const g = m.goalies[1 - h];
@@ -655,6 +680,94 @@ export class GameRenderer {
     ctx.fillRect(px - 6, py - 1, 4, 2);
     ctx.fillRect(px + 6, py - 1, 4, 2);
   }
+
+  /** Close-up fight: two big fighters, punches, health bars. */
+  fightOverlay(ctx: CanvasRenderingContext2D) {
+    const m = this.m;
+    const fi = m.fight;
+    if (m.state !== 'fight' || !fi) return;
+    const { W, H, safe } = display;
+    ctx.fillStyle = 'rgba(8,10,24,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    const cx = Math.round(W / 2);
+    const floor = Math.round(H * 0.72);
+    // spotlight on the ice
+    ctx.fillStyle = 'rgba(238,245,252,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(cx, floor, 95, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const S = 3;
+    for (const side of [0, 1] as Side[]) {
+      const f = fi.f[side];
+      const dirX = side === 0 ? 1 : -1;
+      const kit = this.kits[side];
+      let off = 0;
+      if (f.act === 'punch') off = Math.min(1, f.t / 0.12) * 8;
+      else if (f.act === 'upper') off = Math.min(1, f.t / 0.32) * 10;
+      else if (f.act === 'hit') off = -6 + f.t * 20;
+      else if (f.act === 'block') off = -2;
+      const bob = f.act === 'idle' ? Math.round(Math.sin(fi.t * 6 + side) * 1) : 0;
+      const baseX = cx - dirX * 34 + dirX * off;
+      const pose = f.act === 'down' ? 'down' : 'skate';
+      const spr = skaterSprite(kit, 'side', side === 1, f.act === 'idle' ? 1 : 0, pose, f.num);
+      const sx = Math.round(baseX - SK_AX * S);
+      const sy = Math.round(floor - SK_AY * S + bob);
+      ctx.drawImage(spr, sx, sy, spr.width * S, spr.height * S);
+      if (f.act === 'hit' && f.t < 0.1) {
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillRect(sx + 8, sy, spr.width * S - 16, spr.height * S - 10);
+      }
+      // arms: jab straight out, uppercut rising, or gloves up to block
+      const shoulderX = Math.round(baseX + dirX * 6);
+      const shoulderY = Math.round(floor - 40 + bob);
+      if (f.act === 'punch' || f.act === 'upper') {
+        const reach = f.act === 'punch' ? Math.min(1, f.t / PUNCH_HIT_T) : Math.min(1, f.t / UPPER_HIT_T);
+        const len = Math.round(6 + reach * 20);
+        const rise = f.act === 'upper' ? Math.round(reach * 16) : 0;
+        ctx.fillStyle = kit.jersey;
+        ctx.fillRect(dirX > 0 ? shoulderX : shoulderX - len, shoulderY - rise, len, 5);
+        ctx.fillStyle = '#12121c';
+        ctx.fillRect((dirX > 0 ? shoulderX + len : shoulderX - len - 7) - 1, shoulderY - rise - 2, 9, 9);
+        ctx.fillStyle = kit.glove === kit.jersey ? '#e2e2e8' : kit.glove;
+        ctx.fillRect(dirX > 0 ? shoulderX + len : shoulderX - len - 7, shoulderY - rise - 1, 7, 7);
+      } else if (f.act === 'block') {
+        ctx.fillStyle = '#12121c';
+        ctx.fillRect(shoulderX + dirX * 4 - 5, shoulderY - 16, 10, 14);
+        ctx.fillStyle = '#e2e2e8';
+        ctx.fillRect(shoulderX + dirX * 4 - 4, shoulderY - 15, 8, 12);
+      }
+    }
+    // impact pop
+    const fx = this.punchFx;
+    if (fx) {
+      const tx = cx + (fx.side === 0 ? 1 : -1) * 22;
+      const label = fx.kind === 0 ? 'BLOCK' : fx.kind === 2 ? 'BAM!!' : rng.pick(['POW!', 'WHAP!', 'THUD!']);
+      if (!this.fxLabel || fx.t > 0.28) this.fxLabel = label;
+      text(ctx, this.fxLabel, tx, floor - 66 - Math.round((0.3 - fx.t) * 30), {
+        scale: 2, color: fx.kind === 0 ? '#9be7ff' : '#ffd23f', align: 'center', outline: '#12121c', shadow: null,
+      });
+    }
+    // health bars
+    const bw = Math.min(150, Math.floor((W - 60) / 2));
+    const by = safe.t + 20;
+    for (const side of [0, 1] as Side[]) {
+      const f = fi.f[side];
+      const t = m.teams[side];
+      const x = side === 0 ? cx - 8 - bw : cx + 8;
+      chunky(ctx, x - 1, by - 1, bw + 2, 9, '#12121c');
+      bar(ctx, x, by, bw, 7, f.hp / 100, f.hp < 30 ? UI.red : t.primary, '#3a1010');
+      const label = `#${f.num} ${f.name}`;
+      text(ctx, label, side === 0 ? x : x + bw, by + 11, { color: '#fff', align: side === 0 ? 'left' : 'right' });
+      if (f.side === this.viewer && f.human) text(ctx, 'YOU', side === 0 ? x : x + bw, by + 21, { color: UI.yellow, align: side === 0 ? 'left' : 'right', shadow: null });
+    }
+    const left = Math.max(0, Math.ceil(15 - fi.t));
+    text(ctx, fi.over ? '' : `0:${String(left).padStart(2, '0')}`, cx, by, { color: '#fff', align: 'center' });
+    if (!input.touchMode && fi.over === 0) {
+      text(ctx, 'K = PUNCH   L = UPPERCUT   HOLD SPACE = BLOCK', cx, H - safe.b - 12, { color: '#fff', align: 'center', outline: '#12121c', shadow: null });
+    }
+  }
+
+  private fxLabel = '';
 
   // ---------- HUD ----------
   hud(ctx: CanvasRenderingContext2D) {
@@ -762,7 +875,7 @@ export class GameRenderer {
 
   playerTag(ctx: CanvasRenderingContext2D) {
     const m = this.m;
-    const c = m.ctrl;
+    const c = m.ctrlOf(this.viewer);
     if (!c || m.human < 0) return;
     const { W, H, safe } = display;
     const label = `#${c.p.number} ${c.p.name}`;
@@ -820,14 +933,16 @@ export class GameRenderer {
 
   touchControls(ctx: CanvasRenderingContext2D) {
     const m = this.m;
-    const h = m.human;
+    const h = m.human < 0 ? -1 : this.viewer;
     if (h < 0) return;
     const pk = m.puck;
     const offense = (pk.owner && pk.owner.side === h) || (!pk.owner && pk.passTarget?.side === h) || m.state === 'faceoff';
     const labels: Record<string, string> =
-      m.state === 'faceoff'
+      m.state === 'fight'
+        ? { a: 'BLOCK', b: 'PUNCH', c: 'UPPER' }
+        : m.state === 'faceoff'
         ? { a: 'DRAW', b: 'DRAW', c: '' }
-        : offense && !(m.practice && pk.owner !== m.ctrl)
+        : offense && !(m.practice && pk.owner !== m.ctrlOf(this.viewer))
           ? { a: 'PASS', b: 'SHOOT', c: 'DEKE' }
           : m.practice
             ? { a: 'CALL', b: 'SHOOT', c: 'POKE' }

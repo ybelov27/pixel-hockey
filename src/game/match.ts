@@ -12,7 +12,7 @@ import { aiThink, goalieThink } from './ai';
 export type Side = 0 | 1;
 export type Role = 'C' | 'LW' | 'RW' | 'LD' | 'RD';
 export const ROLES: Role[] = ['C', 'LW', 'RW', 'LD', 'RD'];
-export type MatchKind = 'exhibition' | 'season' | 'playoff' | 'attract' | 'shootout' | 'practice';
+export type MatchKind = 'exhibition' | 'season' | 'playoff' | 'attract' | 'shootout' | 'practice' | 'online';
 
 export interface MatchConfig {
   home: Team;
@@ -26,6 +26,8 @@ export interface MatchConfig {
   /** Easy Controls: aim/pass assist and puck protection for the human. */
   assist?: boolean;
   autoSwitch?: boolean;
+  /** Online versus: side 1 is a second (remote) human player. */
+  human2?: boolean;
 }
 
 export interface PadInput {
@@ -167,7 +169,7 @@ export interface Snap {
 }
 
 export interface MatchEvent {
-  t: 'hit' | 'save' | 'goal' | 'post' | 'spray' | 'shot' | 'board' | 'deke' | 'charge' | 'crossbar' | 'robbed' | 'mph' | 'hattrick';
+  t: 'hit' | 'save' | 'goal' | 'post' | 'spray' | 'shot' | 'board' | 'deke' | 'charge' | 'crossbar' | 'robbed' | 'mph' | 'hattrick' | 'punch' | 'fightEnd';
   x: number;
   y: number;
   side?: Side;
@@ -186,7 +188,7 @@ export interface GoalLog {
 
 export type MatchState =
   | 'intro' | 'faceoff' | 'play' | 'stoppage' | 'goal' | 'replay' | 'periodEnd' | 'intermission' | 'final'
-  | 'soIntro' | 'soAttempt' | 'soResult';
+  | 'soIntro' | 'soAttempt' | 'soResult' | 'fight';
 
 export interface Banner {
   text: string;
@@ -196,6 +198,36 @@ export interface Banner {
   dur: number;
   big: boolean;
 }
+
+export type FightAct = 'idle' | 'punch' | 'upper' | 'block' | 'hit' | 'down';
+
+export interface Fighter {
+  side: Side;
+  num: number;
+  name: string;
+  hp: number;
+  act: FightAct;
+  t: number;
+  cd: number;
+  human: boolean;
+  /** AI: decided whether to block the opponent's current swing (-1 undecided). */
+  guard: number;
+}
+
+export interface Fight {
+  f: [Fighter, Fighter];
+  t: number;
+  over: number;
+  winner: -1 | Side;
+}
+
+/** Per game: at most this many penalties, each followed by a fight. */
+export const MAX_PENALTIES = 2;
+const PUNCH_HIT = 0.12;
+const PUNCH_END = 0.26;
+const UPPER_HIT = 0.32;
+const UPPER_END = 0.56;
+const FIGHT_TIME = 15;
 
 export interface Shootout {
   round: number;
@@ -237,6 +269,15 @@ export class Match {
   time = 0;
   banner: Banner | null = null;
   ctrl: Skater | null = null;
+  /** Skater controlled by the second human (online versus, side 1). */
+  ctrl2: Skater | null = null;
+  /** Input for the second human, set by the scene before each update. */
+  inp2: PadInput | null = null;
+  private foEarly2 = false;
+  fight: Fight | null = null;
+  private penaltyCount = 0;
+  private fightPending: Skater | null = null;
+  fights = 0;
   events: MatchEvent[] = [];
   goals: GoalLog[] = [];
   endType: 'REG' | 'OT' | 'SO' = 'REG';
@@ -321,6 +362,27 @@ export class Match {
   difficulty() {
     return this.cfg.difficulty;
   }
+  /** Two humans (online): no CPU-vs-human difficulty tuning applies. */
+  get versus() {
+    return !!this.cfg.human2;
+  }
+  isHumanSide(s: Side) {
+    return s === this.human || (this.versus && s === 1);
+  }
+  ctrlOf(s: Side) {
+    if (this.versus && s === 1) return this.ctrl2;
+    return s === this.human ? this.ctrl : null;
+  }
+  /** Give control of k to its side's human (ignored for CPU sides). */
+  setCtrl(k: Skater | null, side?: Side) {
+    const s = k ? k.side : side;
+    if (s === undefined) return;
+    if (this.versus && s === 1) this.ctrl2 = k;
+    else if (s === this.human) this.ctrl = k;
+  }
+  isCtrl(k: Skater) {
+    return k === this.ctrl || k === this.ctrl2;
+  }
   emit(t: MatchEvent['t'], x: number, y: number, side?: Side, value?: number) {
     this.events.push({ t, x, y, side, value });
   }
@@ -368,7 +430,8 @@ export class Match {
         }
         if (this.stateT > 1.5) {
           this.assessDelayed();
-          this.beginFaceoff(this.pendingDot);
+          if (this.fightPending) this.startFight(this.fightPending);
+          else this.beginFaceoff(this.pendingDot);
         }
         break;
       case 'goal':
@@ -405,6 +468,9 @@ export class Match {
           this.stateT = 0;
           if (this.cfg.kind === 'attract') this.continueGame();
         }
+        break;
+      case 'fight':
+        this.updateFight(dt, inp);
         break;
       case 'soIntro':
         if (this.stateT > 1.6) this.soSetup();
@@ -497,18 +563,24 @@ export class Match {
     const aiC = this.skaters[cpu][0];
     const diffMod = [0.08, 0.03, 0.0, -0.04][this.cfg.difficulty] ?? 0;
     this.foAi = 0.2 + (75 - aiC.p.fo) * 0.004 + diffMod + rng.next() * 0.12 + (this.cfg.assist ? 0.02 : 0);
-    if (this.human >= 0) this.ctrl = this.skaters[this.human as Side].find((k) => k.role === 'C' && k.onIce) || this.onIce(this.human as Side)[0] || null;
+    this.foEarly2 = false;
+    for (const side of [0, 1] as Side[]) {
+      if (this.isHumanSide(side)) this.setCtrl(this.skaters[side].find((k) => k.role === 'C' && k.onIce) || this.onIce(side)[0] || null, side);
+    }
   }
 
   private updateFaceoff(inp: PadInput | null) {
     const t = this.stateT;
     const pressed = !!inp && (inp.a.pressed || inp.b.pressed);
     const humanIn = this.human >= 0 && !!inp;
+    const i2 = this.versus ? this.inp2 : null;
+    const pressed2 = !!i2 && (i2.a.pressed || i2.b.pressed);
     if (!this.foDropped) {
       if (humanIn && pressed && t > 0.25) {
         this.foEarly = true;
         this.setBanner('TOO EARLY!', 'WAIT FOR THE DROP', '#9d0208', 0.9);
       }
+      if (pressed2 && t > 0.25) this.foEarly2 = true;
       if (t >= this.foDrop) {
         this.foDropped = true;
         this.emit('shot', this.foDot.x, this.foDot.y);
@@ -517,7 +589,17 @@ export class Match {
     }
     const rt = t - this.foDrop;
     let winner: Side | -1 = -1;
-    if (humanIn) {
+    if (this.versus) {
+      // two humans: whoever reacts to the drop first wins it
+      const coin = (): Side => (rng.next() < 0.5 ? 0 : 1);
+      if (this.foEarly && this.foEarly2) winner = coin();
+      else if (this.foEarly) winner = 1;
+      else if (this.foEarly2) winner = 0;
+      else if (pressed && pressed2) winner = coin();
+      else if (pressed) winner = 0;
+      else if (pressed2) winner = 1;
+      else if (rt > 0.9) winner = coin();
+    } else if (humanIn) {
       const h = this.human as Side;
       if (this.foEarly) winner = (1 - h) as Side;
       else if (pressed) winner = rt < this.foAi ? h : ((1 - h) as Side);
@@ -542,7 +624,7 @@ export class Match {
     pk.lastSide = w;
     pk.passTarget = target;
     for (const s of [0, 1] as Side[]) this.skaters[s][0].pickupCD = 0.3;
-    if (this.human === w) this.ctrl = target;
+    this.setCtrl(target);
     this.state = this.state === 'faceoff' ? 'play' : this.state;
     this.stateT = 0;
     this.emit('shot', pk.x, pk.y);
@@ -568,8 +650,13 @@ export class Match {
     }
     // control + AI
     if (this.human >= 0 && inp) this.humanControl(dt, inp);
-    for (const k of this.all()) if (k !== this.ctrl || this.human < 0) aiThink(this, k, dt);
-    for (const g of this.goalies) if (g.active) goalieThink(this, g, dt, so && this.human === g.side ? inp : null);
+    if (this.versus && this.inp2) this.humanControl(dt, this.inp2, 1);
+    for (const k of this.all()) if (!(this.human >= 0 && this.isCtrl(k))) aiThink(this, k, dt);
+    for (const g of this.goalies) {
+      if (!g.active) continue;
+      const gi = so && this.isHumanSide(g.side) ? (this.versus && g.side === 1 ? this.inp2 : inp) : null;
+      goalieThink(this, g, dt, gi);
+    }
     // physics
     for (const k of this.all()) this.moveSkater(k, dt);
     this.collide();
@@ -617,19 +704,22 @@ export class Match {
     }
   }
 
-  private humanControl(dt: number, inp: PadInput) {
-    const h = this.human as Side;
-    let c = this.ctrl;
+  private humanControl(dt: number, inp: PadInput, side: Side = this.human as Side) {
+    const h = side;
+    let c = this.ctrlOf(h);
     if (!c || !c.onIce || c.side !== h) {
       c = this.closestTo(h, this.puck.x, this.puck.y);
-      this.ctrl = c;
+      this.setCtrl(c, h);
     }
     if (!c) return;
     const pk = this.puck;
     const oppHas = (pk.owner && pk.owner.side !== h) || (pk.gOwner && pk.gOwner.side !== h);
     if (oppHas && !this.practice && Math.hypot(c.x - pk.x, c.y - pk.y) > 150) {
       const n = this.closestTo(h, pk.x, pk.y);
-      if (n) c = this.ctrl = n;
+      if (n) {
+        this.setCtrl(n);
+        c = n;
+      }
     }
     // auto-switch on defense, with hysteresis so control never flickers
     this.switchT -= dt;
@@ -640,7 +730,8 @@ export class Match {
         const dc = Math.hypot(c.x - pk.x, c.y - pk.y);
         const dn = Math.hypot(n.x - pk.x, n.y - pk.y);
         if (dn < dc * 0.75 && dc - dn > 20) {
-          c = this.ctrl = n;
+          this.setCtrl(n);
+          c = n;
           this.switchT = 0.35;
         }
       }
@@ -675,7 +766,7 @@ export class Match {
         if (this.practice) this.passCall = 0.6;
         else {
           const n = this.closestTo(h, pk.x, pk.y, c);
-          if (n) this.ctrl = n;
+          if (n) this.setCtrl(n);
         }
       } else if (inp.b.pressed) {
         this.doCheck(c);
@@ -691,7 +782,7 @@ export class Match {
 
   /** True when assists apply to this skater (the human's team). */
   assisted(k: { side: Side }) {
-    return !!this.cfg.assist && this.human >= 0 && k.side === this.human;
+    return !!this.cfg.assist && this.human >= 0 && this.isHumanSide(k.side);
   }
 
   closestTo(s: Side, x: number, y: number, exclude: Skater | null = null) {
@@ -761,7 +852,7 @@ export class Match {
     pk.vz = d0 > 160 ? 45 : 0;
     pk.passTarget = t;
     pk.shot = null;
-    if (this.human === c.side && !this.practice) this.ctrl = t;
+    if (!this.practice) this.setCtrl(t);
     this.emit('shot', pk.x, pk.y);
     events.pass = true;
   }
@@ -787,7 +878,7 @@ export class Match {
     const assist = this.assisted(c);
     if (aimY === null) aimY = this.openCorner(side);
     // the player's slap shots charged past half power always ring in bar down
-    const barDown = this.human >= 0 && c === this.ctrl && power > HALF_POWER && this.ax(side, pk.x) < RINK_L - GOAL_LINE - 4;
+    const barDown = this.human >= 0 && this.isCtrl(c) && power > HALF_POWER && this.ax(side, pk.x) < RINK_L - GOAL_LINE - 4;
     if (barDown) aimY = clamp(aimY, CY - GOAL_HW + 3.5, CY + GOAL_HW - 3.5);
     let speed = power > 0 ? 400 + power * 150 + c.p.sht * 0.6 : 330 + c.p.sht * 0.9;
     if (oneTimer) speed += 40;
@@ -836,8 +927,8 @@ export class Match {
 
   private goalieReactMod(g: Goalie) {
     const d = this.cfg.difficulty;
-    if (this.human < 0) return 0;
-    return g.side === this.human ? [-0.03, 0, 0.01, 0.02][d] : [0.07, 0.02, 0, -0.02][d];
+    if (this.human < 0 || this.versus) return 0;
+    return g.side === this.human ? [0.0, 0.02, 0.04, 0.05][d] : [0.04, 0, -0.02, -0.04][d];
   }
 
   doDeke(c: Skater) {
@@ -869,7 +960,7 @@ export class Match {
       const d = Math.hypot(dx, dy);
       const facing = (dx * fx + dy * fy) / (d || 1);
       if (d < 19 && facing > 0.1) {
-        let chance = carrier.deke > 0 ? 0 : (c === this.ctrl ? 0.32 : 0.5) + (c.p.def - carrier.p.hnd) * 0.012;
+        let chance = carrier.deke > 0 ? 0 : (this.isCtrl(c) ? 0.32 : 0.5) + (c.p.def - carrier.p.hnd) * 0.012;
         // winding up a slap shot leaves the puck exposed
         if (carrier.charge > 0.1) chance = Math.min(0.9, chance * 1.6);
         else if (this.assisted(carrier)) chance *= 0.75;
@@ -1037,8 +1128,8 @@ export class Match {
   private contactStrip(def: Skater, car: Skater) {
     const pk = this.puck;
     if (pk.owner !== car || def.down > 0 || car.deke > 0 || this.state !== 'play') return;
-    const lvl = this.human < 0 ? 2 : def.side === this.human ? 1 : this.cfg.difficulty;
-    let rate = def === this.ctrl ? 1.2 : [1.2, 1.6, 2.0, 2.5][lvl];
+    const lvl = this.human < 0 ? 2 : this.versus || def.side === this.human ? 1 : this.cfg.difficulty;
+    let rate = this.isCtrl(def) ? 1.2 : [1.2, 1.6, 2.0, 2.5][lvl];
     if (car.charge > 0.1) rate *= 2;
     else if (this.assisted(car)) rate *= 0.8;
     if (rng.next() >= rate / 60) return;
@@ -1099,7 +1190,7 @@ export class Match {
     pk.lastSide = k.side;
     k.lastPuck = this.time;
     this.touch(k);
-    if (this.human === k.side && this.state === 'play' && !this.practice) this.ctrl = k;
+    if (this.state === 'play' && !this.practice) this.setCtrl(k);
     if (this.delayed && this.delayed.sk.side === k.side) this.whistle('PENALTY', this.penaltyDot(this.delayed.sk.side));
   }
 
@@ -1326,9 +1417,9 @@ export class Match {
   saveChance(g: Goalie, shot: Shot, d: number) {
     let base = 0.915 + (g.p.goa - 80) * 0.007;
     const diff = this.cfg.difficulty;
-    if (this.human >= 0) {
-      if (shot.side === this.human) base += [-0.02, 0.03, 0.05, 0.08][diff];
-      else base += [0.08, 0.03, 0, -0.02][diff];
+    if (this.human >= 0 && !this.versus) {
+      if (shot.side === this.human) base += [0.02, 0.07, 0.09, 0.11][diff];
+      else base += [0.0, -0.04, -0.07, -0.1][diff];
     }
     const gx = this.goalX(g.side);
     const dist = Math.hypot(shot.sx - gx, shot.sy - CY);
@@ -1414,7 +1505,7 @@ export class Match {
       pk.vy = (dy / d) * sp;
       pk.passTarget = best;
       pk.lastSide = g.side;
-      if (this.human === g.side) this.ctrl = best;
+      this.setCtrl(best);
       events.pass = true;
     } else {
       this.whistle('FROZEN', endDot(this.goalX(g.side) < CX, pk.y < CY));
@@ -1480,8 +1571,9 @@ export class Match {
 
   callPenalty(off: Skater, name: string) {
     if (!this.cfg.penalties || this.state !== 'play' || off.penalty > 0 || this.cfg.kind === 'attract') return;
-    if (this.delayed) return;
+    if (this.delayed || this.penaltyCount >= MAX_PENALTIES) return;
     if (this.skaters[off.side].filter((k) => k.penalty > 0).length >= 2) return;
+    this.penaltyCount++;
     const victim = (1 - off.side) as Side;
     const pk = this.puck;
     const victimHas = (pk.owner && pk.owner.side === victim) || (!pk.owner && !pk.gOwner && pk.lastSide === victim);
@@ -1502,7 +1594,8 @@ export class Match {
     k.charge = -1;
     const victim = (1 - k.side) as Side;
     this.ppOpp[victim]++;
-    if (this.ctrl === k) this.ctrl = null;
+    if (this.fights < MAX_PENALTIES && this.human >= 0 && this.cfg.kind !== 'practice') this.fightPending = k;
+    if (this.isCtrl(k)) this.setCtrl(null, k.side);
     this.pendingDot = this.penaltyDot(k.side);
     this.setBanner('POWER PLAY', `${this.teams[victim].abbr} - ${this.penaltyLen} SECONDS`, this.teams[victim].primary, 1.6);
   }
@@ -1640,6 +1733,138 @@ export class Match {
       return;
     }
     this.beginFaceoff(CENTER_DOT);
+  }
+
+  // ---------- fights ----------
+  /** The offender drops the gloves with an opponent; humans always fight their own side. */
+  private startFight(off: Skater) {
+    this.fightPending = null;
+    this.fights++;
+    const foeSide = (1 - off.side) as Side;
+    const foe =
+      this.ctrlOf(foeSide) && this.ctrlOf(foeSide)!.onIce
+        ? this.ctrlOf(foeSide)!
+        : [...this.skaters[foeSide]].filter((k) => !k.benched && k.penalty <= 0).sort((a, b) => b.p.chk - a.p.chk)[0] || this.skaters[foeSide][0];
+    const mk = (k: Skater): Fighter => ({
+      side: k.side, num: k.p.number, name: k.p.name, hp: 100, act: 'idle', t: 0, cd: 0.6, human: this.isHumanSide(k.side), guard: -1,
+    });
+    const a = mk(off);
+    const b = mk(foe);
+    this.fight = { f: off.side === 0 ? [a, b] : [b, a], t: 0, over: 0, winner: -1 };
+    this.state = 'fight';
+    this.stateT = 0;
+    this.setBanner('FIGHT!', `#${off.p.number} ${off.p.name} VS #${foe.p.number} ${foe.p.name}`, '#9d0208', 1.6, true);
+    events.whistle = true;
+  }
+
+  private updateFight(dt: number, inp: PadInput | null) {
+    const fi = this.fight;
+    if (!fi) {
+      this.beginFaceoff(this.pendingDot);
+      return;
+    }
+    fi.t += dt;
+    if (fi.over > 0) {
+      fi.over += dt;
+      if (fi.over > 2.4) this.endFight();
+      return;
+    }
+    for (const s of [0, 1] as Side[]) {
+      const me = fi.f[s];
+      const opp = fi.f[1 - s];
+      const pad = me.human ? (s === this.human ? inp : this.inp2) : null;
+      me.t += dt;
+      me.cd = Math.max(0, me.cd - dt);
+      if (me.act === 'punch' || me.act === 'upper') {
+        const hitAt = me.act === 'punch' ? PUNCH_HIT : UPPER_HIT;
+        const endAt = me.act === 'punch' ? PUNCH_END : UPPER_END;
+        if (me.t >= hitAt && me.t - dt < hitAt) this.landBlow(me, opp, me.act === 'upper');
+        if (me.t >= endAt) {
+          me.act = 'idle';
+          me.t = 0;
+        }
+        continue;
+      }
+      if (me.act === 'hit') {
+        if (me.t > 0.28) {
+          me.act = 'idle';
+          me.t = 0;
+        }
+        continue;
+      }
+      if (me.act === 'down') continue;
+      if (pad) {
+        if (pad.b.pressed && me.cd <= 0) this.swing(me, 'punch');
+        else if (pad.c.pressed && me.cd <= 0) this.swing(me, 'upper');
+        else me.act = pad.a.down ? 'block' : 'idle';
+      } else this.fightAI(me, opp, dt);
+    }
+    if (fi.t > FIGHT_TIME) {
+      const [a, b] = fi.f;
+      const w: Side | -1 = a.hp === b.hp ? -1 : a.hp > b.hp ? 0 : 1;
+      fi.winner = w;
+      fi.over = 0.001;
+      if (w === -1) {
+        this.setBanner('LINESMEN STEP IN', 'A DRAW', '#14213d', 2.2, true);
+        this.emit('fightEnd', CX, CY);
+      } else {
+        this.setBanner('LINESMEN STEP IN', `#${fi.f[w].num} ${fi.f[w].name} WINS THE FIGHT`, '#14213d', 2.2, true);
+        this.emit('fightEnd', CX, CY, w);
+      }
+    }
+  }
+
+  private swing(me: Fighter, kind: 'punch' | 'upper') {
+    me.act = kind;
+    me.t = 0;
+    me.cd = kind === 'punch' ? 0.34 : 1.0;
+    me.guard = -1;
+  }
+
+  private landBlow(me: Fighter, opp: Fighter, upper: boolean) {
+    const fi = this.fight!;
+    if (opp.act === 'down') return;
+    const blocked = opp.act === 'block';
+    const dmg = upper ? (blocked ? 5 : 19) : blocked ? 1 : 8;
+    opp.hp = Math.max(0, opp.hp - dmg);
+    if (!blocked) {
+      opp.act = 'hit';
+      opp.t = 0;
+    }
+    this.emit('punch', CX, CY, me.side, blocked ? 0 : upper ? 2 : 1);
+    if (opp.hp <= 0) {
+      opp.act = 'down';
+      opp.t = 0;
+      fi.winner = me.side;
+      fi.over = 0.001;
+      this.setBanner('KNOCKOUT!', `#${me.num} ${me.name} WINS THE FIGHT`, this.teams[me.side].primary, 2.2, true);
+      this.emit('fightEnd', CX, CY, me.side);
+    }
+  }
+
+  private fightAI(me: Fighter, opp: Fighter, dt: number) {
+    const lvl = this.versus ? 1 : this.cfg.difficulty;
+    const swinging = (opp.act === 'punch' && opp.t < PUNCH_HIT) || (opp.act === 'upper' && opp.t < UPPER_HIT);
+    if (swinging) {
+      if (me.guard < 0) me.guard = rng.next() < [0.25, 0.4, 0.55, 0.7][lvl] ? 1 : 0;
+      me.act = me.guard ? 'block' : 'idle';
+      return;
+    }
+    me.guard = -1;
+    me.act = 'idle';
+    if (me.cd > 0) return;
+    if (rng.next() < [1.3, 1.7, 2.2, 2.7][lvl] * dt) this.swing(me, 'punch');
+    else if (rng.next() < 0.45 * dt) this.swing(me, 'upper');
+  }
+
+  private endFight() {
+    const fi = this.fight!;
+    if (fi.winner >= 0) {
+      // momentum: the losing side's skaters are rattled
+      for (const k of this.skaters[1 - fi.winner]) k.p.stamina = Math.max(20, k.p.stamina - 25);
+    }
+    this.fight = null;
+    this.beginFaceoff(this.pendingDot);
   }
 
   // ---------- periods ----------
@@ -1814,7 +2039,9 @@ export class Match {
     this.possess(shooter);
     so.shotTaken = false;
     so.settle = 0;
-    this.ctrl = this.human === s ? shooter : null;
+    this.ctrl = null;
+    this.ctrl2 = null;
+    this.setCtrl(shooter);
     this.state = 'soAttempt';
     this.stateT = 0;
     this.setBanner(`${this.teams[s].abbr} #${shooter.p.number}`, shooter.p.name, this.teams[s].primary, 1.2);
@@ -1884,7 +2111,7 @@ export class Match {
     const pk = this.puck;
     const sk: SkSnap[] = this.all().map((k) => ({
       side: k.side, x: k.x, y: k.y, face: k.face, speed: Math.hypot(k.vx, k.vy), anim: k.anim, down: k.down > 0,
-      celebrate: k.celebrate, charge: k.charge, follow: k.follow, number: k.p.number, ctrl: k === this.ctrl,
+      celebrate: k.celebrate, charge: k.charge, follow: k.follow, number: k.p.number, ctrl: this.isCtrl(k),
       hasPuck: pk.owner === k, deke: k.deke,
     }));
     const go: GoSnap[] = this.goalies.filter((g) => g.active).map((g) => ({
@@ -1903,7 +2130,7 @@ export class Match {
   }
 
   private buildReplay() {
-    if (this.goalFrame < 0) {
+    if (this.goalFrame < 0 || this.cfg.kind === 'online') {
       this.replay = [];
       return;
     }
@@ -1930,6 +2157,11 @@ export class Match {
 
   get delayedPenalty() {
     return this.delayed;
+  }
+
+  /** Online guests mirror the host's delayed-penalty flag for the HUD. */
+  setMirrorDelayed(on: boolean) {
+    this.delayed = on ? { sk: this.skaters[0][0], name: '' } : null;
   }
 }
 

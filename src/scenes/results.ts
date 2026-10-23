@@ -9,6 +9,8 @@ export class ResultsScene implements Scene {
   constructor(
     private m: Match,
     private onContinue: () => void,
+    /** Whose result this is (online guests are side 1). */
+    private viewer?: Side,
   ) {}
 
   private btn() {
@@ -24,10 +26,10 @@ export class ResultsScene implements Scene {
   render(ctx: CanvasRenderingContext2D) {
     const m = this.m;
     const { W, H, safe } = display;
-    const hs = (m.human >= 0 ? m.human : m.winner()) as Side;
+    const hs = (this.viewer ?? (m.human >= 0 ? m.human : m.winner())) as Side;
     const you = m.teams[hs];
     menuBg(ctx, W, H, you.primary);
-    const won = m.human >= 0 && m.winner() === m.human;
+    const won = m.human >= 0 && m.winner() === hs;
     const title = m.human < 0 ? 'FINAL' : won ? 'VICTORY!' : 'DEFEAT';
     header(ctx, W, title, you, safe.t);
     const top = 24 + safe.t;

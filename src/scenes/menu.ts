@@ -16,6 +16,7 @@ import { ResultsScene } from './results';
 import { SeasonHubScene, SeasonSetupScene } from './season';
 import { SettingsScene } from './settings';
 import { HelpScene } from './help';
+import { OnlineMenuScene } from './online';
 
 export const SEASON_KEY = 'ph.season';
 
@@ -38,6 +39,7 @@ export class MainMenu implements Scene {
       { label: 'SEASON', sub: seasonSub, color: '#f4a236', act: () => this.openSeason() },
       { label: 'SHOOTOUT', sub: 'SUDDEN DRAMA', color: '#3a86ff', act: () => shootoutGame() },
       { label: 'PRACTICE', sub: 'SHOOTING & ONE-TIMERS', color: '#2a9d8f', act: () => practiceGame() },
+      { label: 'ONLINE 1V1', sub: 'PLAY A FRIEND', color: '#7209b7', act: () => scenes.go(new OnlineMenuScene()) },
       { label: 'SETTINGS', color: '#4a557f', act: () => scenes.go(new SettingsScene(() => scenes.go(new MainMenu()))) },
       { label: 'HELP', color: '#4a557f', act: () => scenes.go(new HelpScene(() => scenes.go(new MainMenu()))) },
     ];
@@ -58,12 +60,12 @@ export class MainMenu implements Scene {
     const smallH = 15;
     const gap = 4;
     const avail = H - top - 14;
-    const bigH = Math.max(18, Math.min(24, Math.floor((avail - smallH - 4 * gap) / 4)));
+    const bigH = Math.max(18, Math.min(24, Math.floor((avail - smallH - 5 * gap) / 5)));
     const w = Math.min(190, W - 40);
     const x = Math.round(W / 2 - w / 2);
     const rects: Rect[] = [];
     let y = top;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       rects.push({ x, y, w, h: bigH });
       y += bigH + gap;
     }
@@ -90,7 +92,7 @@ export class MainMenu implements Scene {
     rects.forEach((r, i) => {
       const it = this.labels[i];
       if (!it) return;
-      button(ctx, r, it.label, { color: it.color, selected: this.menu.sel === i, sub: i < 4 ? it.sub : undefined });
+      button(ctx, r, it.label, { color: it.color, selected: this.menu.sel === i, sub: i < 5 ? it.sub : undefined });
     });
     text(ctx, 'V1.0', W - safe.r - 4, H - safe.b - 9, { color: 'rgba(255,255,255,0.4)', align: 'right', shadow: null });
   }

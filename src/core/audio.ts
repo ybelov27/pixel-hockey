@@ -228,6 +228,17 @@ class Audio {
         [0.75, 1.0, 1.25, 1.375, 1.5].forEach((t) => this.noise(0.05, 0.25, 'bandpass', 1500, t, 1.2));
         break;
       }
+      case 'punch':
+        if (power <= 0) {
+          this.noise(0.06, 0.18, 'lowpass', 900);
+          this.tone(300, 0.05, 'triangle', 0.08, 200);
+        } else {
+          this.noise(0.09, 0.32 * power, 'lowpass', 1400);
+          this.tone(130, 0.12, 'square', 0.16, 55);
+          this.noise(0.03, 0.2, 'highpass', 3000);
+          if (power >= 2) this.cheer(1.2, 0.16);
+        }
+        break;
       case 'whoosh':
         this.noise(0.25, 0.08, 'highpass', 3000);
         break;
@@ -255,40 +266,102 @@ class Audio {
     }
   }
 
+  private reverbIn: GainNode | null = null;
+
+  /** Small arena echo: two cross-fed delays with damping, shared by impact sounds. */
+  private arenaVerb() {
+    if (this.reverbIn || !this.ctx || !this.master) return this.reverbIn;
+    const c = this.ctx;
+    const input = c.createGain();
+    input.gain.value = 0.32;
+    const out = c.createGain();
+    out.gain.value = 1;
+    out.connect(this.master);
+    for (const [time, fb] of [[0.083, 0.42], [0.127, 0.38], [0.191, 0.3]] as [number, number][]) {
+      const d = c.createDelay(1);
+      d.delayTime.value = time;
+      const damp = c.createBiquadFilter();
+      damp.type = 'lowpass';
+      damp.frequency.value = 3200;
+      const g = c.createGain();
+      g.gain.value = fb;
+      input.connect(d);
+      d.connect(damp);
+      damp.connect(g);
+      g.connect(d);
+      damp.connect(out);
+    }
+    this.reverbIn = input;
+    return input;
+  }
+
   /**
-   * A struck steel pipe: sharp click plus inharmonic, slowly beating partials
-   * that ring out. pitch scales the frequencies, vol the loudness.
+   * A frozen puck striking a steel crossbar: a sharp click, a short low thud
+   * from the impact, then the bright "TING" of a hollow steel tube (inharmonic
+   * free-bar modes that beat slightly and ring out), echoing round the arena.
+   * pitch scales the frequencies, vol the loudness.
    */
   private metalRing(pitch: number, vol: number) {
     if (!this.ok()) return;
     const c = this.ctx!;
     const t = c.currentTime;
-    this.noise(0.025, 0.45 * vol, 'highpass', 4000);
-    this.noise(0.05, 0.2 * vol, 'bandpass', 1800, 0, 3);
+    const verb = this.arenaVerb();
     const out = c.createGain();
     out.gain.value = vol;
     const hp = c.createBiquadFilter();
     hp.type = 'highpass';
-    hp.frequency.value = 500;
+    hp.frequency.value = 300;
     out.connect(hp);
     hp.connect(this.master!);
-    // ratios of a free-free bar's modes, giving the classic "ting" of hockey pipe
+    if (verb) hp.connect(verb);
+    // contact click: a few milliseconds of bright noise
+    if (this.noiseBuf) {
+      const n = c.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const f = c.createBiquadFilter();
+      f.type = 'highpass';
+      f.frequency.value = 2500;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.55, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
+      n.connect(f);
+      f.connect(g);
+      g.connect(out);
+      n.start(t, Math.random());
+      n.stop(t + 0.02);
+    }
+    // puck thud
+    const th = c.createOscillator();
+    const tg = c.createGain();
+    th.type = 'sine';
+    th.frequency.setValueAtTime(240, t);
+    th.frequency.exponentialRampToValueAtTime(90, t + 0.05);
+    tg.gain.setValueAtTime(0.25, t);
+    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    th.connect(tg);
+    tg.connect(out);
+    th.start(t);
+    th.stop(t + 0.08);
+    // the ring: steel tube modes (1 : 2.756 : 5.404 : 8.933), each a beating pair
+    const f0 = 1520 * pitch;
     const partials: [number, number, number][] = [
-      [1, 0.2, 1.1],
-      [2.76, 0.13, 0.8],
-      [5.4, 0.07, 0.5],
-      [8.93, 0.035, 0.3],
+      [1, 0.11, 0.75],
+      [2.756, 0.14, 0.6],
+      [5.404, 0.07, 0.38],
+      [8.933, 0.035, 0.22],
+      [13.34, 0.018, 0.12],
     ];
     for (const [ratio, amp, decay] of partials) {
-      for (const det of [-2.5, 2.5]) {
+      for (const det of [-3.5, 3.5]) {
         const o = c.createOscillator();
         const g = c.createGain();
         o.type = 'sine';
-        const f = 1180 * pitch * ratio + det;
-        o.frequency.setValueAtTime(f * 1.012, t);
-        o.frequency.exponentialRampToValueAtTime(f, t + 0.06);
+        const f = f0 * ratio + det * ratio;
+        o.frequency.setValueAtTime(f * 1.008, t);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.03);
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(amp, t + 0.004);
+        g.gain.exponentialRampToValueAtTime(amp, t + 0.002);
+        g.gain.exponentialRampToValueAtTime(amp * 0.35, t + decay * 0.25);
         g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
         o.connect(g);
         g.connect(out);

@@ -2,7 +2,9 @@ import { display } from '../core/display';
 import { input } from '../core/input';
 import { audio } from '../core/audio';
 import { hashString, rng } from '../core/rng';
-import { Match, events, type MatchConfig } from '../game/match';
+import { Match, events, type MatchConfig, type MatchEvent, type PadInput, type Side } from '../game/match';
+import type { NetLink, NetMessage } from '../net/net';
+import { RemotePad, applyState, emptySounds, encodeState, mergeSounds, type InputPacket, type SoundFlags, type StatePacket } from '../net/sync';
 import { GameRenderer } from '../render/gameRender';
 import { text } from '../render/font';
 import { button, chunky, Menu, panel, UI, type Rect } from '../render/ui';
@@ -11,6 +13,12 @@ import type { Scene } from './scene';
 
 const TIPS_KEY = 'ph.tips';
 
+/** Online play: the host runs the match; the guest mirrors it and sends controls. */
+export interface NetPlay {
+  link: NetLink;
+  role: 'host' | 'guest';
+}
+
 export class GameScene implements Scene {
   m: Match;
   private r: GameRenderer;
@@ -18,13 +26,60 @@ export class GameScene implements Scene {
   private pauseMenu = new Menu([]);
   private chargeT = 12;
 
+  private remote = new RemotePad();
+  private latest: StatePacket | null = null;
+  private fresh = false;
+  private pendingEv: MatchEvent[] = [];
+  private pendingSnd: SoundFlags = emptySounds();
+  private tickN = 0;
+  private sentGoals = 0;
+  private netLost = false;
+  private viewer: Side;
+
   constructor(
     cfg: MatchConfig,
     private onFinish: (m: Match) => void,
     private onQuit: () => void,
+    private net?: NetPlay,
   ) {
     this.m = new Match(cfg);
     this.r = new GameRenderer(this.m);
+    this.viewer = net?.role === 'guest' ? 1 : this.m.human >= 0 ? (this.m.human as Side) : 0;
+    this.r.viewer = this.viewer;
+    if (net) {
+      const done = onFinish;
+      const quit = onQuit;
+      this.onFinish = (m) => {
+        net.link.close();
+        done(m);
+      };
+      this.onQuit = () => {
+        net.link.close();
+        quit();
+      };
+      net.link.onMessage = (msg) => this.onNet(msg);
+      net.link.onClose = () => {
+        if (this.m.state !== 'final') this.netLost = true;
+      };
+    }
+  }
+
+  private get guest() {
+    return this.net?.role === 'guest';
+  }
+
+  private onNet(msg: NetMessage) {
+    if (msg.t === 'bye') {
+      if (this.m.state !== 'final') this.netLost = true;
+      return;
+    }
+    if (this.net?.role === 'host') {
+      if (msg.t === 'i') this.remote.receive(msg as unknown as InputPacket);
+      if (msg.t === 'cont' && this.m.state === 'intermission') this.m.continueGame();
+    } else if (msg.t === 's') {
+      this.latest = msg as unknown as StatePacket;
+      this.fresh = true;
+    }
   }
 
   enter() {
@@ -73,7 +128,7 @@ export class GameScene implements Scene {
       });
       items.push({ label: 'NEW PUCK', color: '#3a86ff', act: () => { m.practiceReset(); this.paused = false; } });
     }
-    items.push({ label: m.practice ? 'END PRACTICE' : 'QUIT GAME', color: '#6a4c93', act: () => this.onQuit() });
+    items.push({ label: m.practice ? 'END PRACTICE' : this.net ? 'LEAVE MATCH' : 'QUIT GAME', color: '#6a4c93', act: () => this.onQuit() });
     return items;
   }
 
@@ -94,8 +149,14 @@ export class GameScene implements Scene {
   update(dt: number) {
     const m = this.m;
     this.layoutTouch();
+    if (this.netLost) {
+      input.gameTouch = false;
+      const r = this.panelButton();
+      if (input.confirm.pressed || input.tapIn(r.x, r.y, r.w, r.h)) this.onQuit();
+      return;
+    }
     const { W, safe } = display;
-    const play = m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt';
+    const play = m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt' || m.state === 'fight';
     input.gameTouch = input.touchMode && play && !this.paused;
     const pauseTap = input.taps.some((t) => t.x > W - safe.r - 30 && t.y < safe.t + 26);
     if ((input.start.pressed || pauseTap) && this.live()) {
@@ -108,16 +169,18 @@ export class GameScene implements Scene {
       this.pauseMenu.items = this.pauseRects().map((r) => ({ r }));
       const i = this.pauseMenu.update();
       if (i >= 0) this.pauseItems()[i].act();
-      return;
+      // online matches keep running while your menu is open
+      if (!this.net) return;
     }
-    if (m.state === 'goal' || m.state === 'replay') {
+    if (!this.guest && (m.state === 'goal' || m.state === 'replay')) {
       if (input.anyTap() || input.confirm.pressed || input.a.pressed || input.b.pressed) m.skip = true;
     }
     if (m.state === 'intermission') {
       const r = this.panelButton();
       if (input.confirm.pressed || input.tapIn(r.x, r.y, r.w, r.h)) {
         audio.sfx('select');
-        m.continueGame();
+        if (this.guest) this.net!.link.send({ t: 'cont' });
+        else m.continueGame();
       }
     } else if (m.state === 'final') {
       const r = this.panelButton();
@@ -128,8 +191,35 @@ export class GameScene implements Scene {
       }
     }
     const was = m.state;
-    m.update(dt, play ? input : null);
-    if (m.state === 'final' && was !== 'final') audio.sfx(m.human >= 0 && m.winner() === m.human ? 'win' : 'lose');
+    const local: PadInput | null = play && !this.paused ? input : null;
+    if (this.guest) {
+      this.sendInput(local);
+      if (!this.latest) return;
+      applyState(m, this.latest, this.fresh ? 0.6 : 0.35);
+      if (this.fresh) {
+        this.fresh = false;
+        m.events = this.latest.ev;
+        Object.assign(events, this.latest.snd);
+      } else m.events = [];
+    } else {
+      if (this.net) {
+        this.remote.tick();
+        m.inp2 = this.remote;
+      }
+      m.update(dt, local);
+      if (this.net) {
+        this.pendingEv.push(...m.events);
+        mergeSounds(this.pendingSnd);
+        if (++this.tickN % 2 === 0) {
+          this.net.link.send(encodeState(m, this.pendingEv, this.pendingSnd, this.sentGoals) as unknown as NetMessage);
+          this.sentGoals = m.goals.length;
+          this.pendingEv = [];
+          this.pendingSnd = emptySounds();
+        }
+      }
+    }
+    if (m.state === 'fight' && was !== 'fight') audio.cheer(2.5, 0.24);
+    if (m.state === 'final' && was !== 'final') audio.sfx(m.human >= 0 && m.winner() === this.viewer ? 'win' : 'lose');
     this.sounds();
     for (const e of m.events) {
       this.r.handle(e);
@@ -137,6 +227,8 @@ export class GameScene implements Scene {
       if (e.t === 'deke') audio.sfx('deke');
       if (e.t === 'crossbar') audio.sfx(e.value ? 'bardown' : 'crossbar');
       if (e.t === 'robbed') audio.sfx('ooh');
+      if (e.t === 'punch') audio.sfx('punch', e.value ?? 1);
+      if (e.t === 'fightEnd') audio.cheer(3, 0.26);
       if (e.t === 'goal') {
         // NHL tradition: the horn and goal song play only for the home team
         const barDown = m.events.some((x) => x.t === 'crossbar' && x.value);
@@ -146,7 +238,7 @@ export class GameScene implements Scene {
         } else audio.sfx('groan');
       }
     }
-    m.events.length = 0;
+    m.events = [];
     // the home crowd gets loud when its team presses in the offensive zone
     this.chargeT -= dt;
     const pk = m.puck;
@@ -163,6 +255,19 @@ export class GameScene implements Scene {
     this.updateTips(dt);
     const snap = m.state === 'replay' && m.replay.length ? m.replay[Math.floor(m.replayPos)] : m.snapshot();
     this.r.update(dt, snap);
+  }
+
+  private sendInput(p: PadInput | null) {
+    const b = (x: { down: boolean; pressed: boolean; released: boolean } | undefined): [boolean, boolean, boolean] =>
+      x ? [x.down, x.pressed, x.released] : [false, false, false];
+    const pkt: InputPacket = {
+      t: 'i',
+      mx: p ? Math.round(p.move.x * 100) / 100 : 0,
+      my: p ? Math.round(p.move.y * 100) / 100 : 0,
+      sp: p ? p.sprint : false,
+      b: [b(p?.a), b(p?.b), b(p?.c)],
+    };
+    this.net!.link.send(pkt as unknown as NetMessage);
   }
 
   private tip: { text: string; t: number } | null = null;
@@ -184,8 +289,9 @@ export class GameScene implements Scene {
       this.tip = { text, t: 4.5 };
     };
     const touch = input.touchMode;
-    if (pk.owner && pk.owner === m.ctrl) show('puck', touch ? 'TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT' : 'K = SHOOT (HOLD FOR SLAPSHOT)  J = PASS');
-    else if (pk.owner && pk.owner.side !== m.human) show('defend', touch ? 'CHECK OR POKE TO STEAL - SWITCH CHANGES PLAYER' : 'K = CHECK  L = POKE  J = SWITCH PLAYER');
+    const me = m.ctrlOf(this.viewer);
+    if (pk.owner && pk.owner === me) show('puck', touch ? 'TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT' : 'K = SHOOT (HOLD FOR SLAPSHOT)  SPACE = PASS');
+    else if (pk.owner && pk.owner.side !== this.viewer) show('defend', touch ? 'CHECK OR POKE TO STEAL - SWITCH CHANGES PLAYER' : 'K = CHECK  L = POKE  SPACE = SWITCH');
   }
 
   private sounds() {
@@ -221,7 +327,8 @@ export class GameScene implements Scene {
     }
     this.r.hud(ctx);
     if (m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt') this.r.playerTag(ctx);
-    if (input.touchMode && (m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt') && !this.paused) this.r.touchControls(ctx);
+    this.r.fightOverlay(ctx);
+    if (input.touchMode && (m.state === 'play' || m.state === 'faceoff' || m.state === 'soAttempt' || m.state === 'fight') && !this.paused) this.r.touchControls(ctx);
     this.r.banner(ctx);
     if (this.tip && m.state === 'play') {
       const w = Math.min(W - 20, this.tip.text.length * 6 + 12);
@@ -237,6 +344,14 @@ export class GameScene implements Scene {
     }
     if (m.state === 'intermission') this.statsPanel(ctx, 'INTERMISSION', 'CONTINUE');
     if (m.state === 'final' && m.stateT > 0.6) this.statsPanel(ctx, 'FINAL', 'CONTINUE');
+    if (this.netLost) {
+      ctx.fillStyle = 'rgba(8,10,24,0.75)';
+      ctx.fillRect(0, 0, W, H);
+      text(ctx, 'CONNECTION LOST', W / 2, H / 2 - 30, { scale: 2, color: '#fff', align: 'center', outline: '#12121c' });
+      text(ctx, 'YOUR OPPONENT LEFT OR THE NETWORK DROPPED', W / 2, H / 2 - 6, { color: UI.dim, align: 'center' });
+      button(ctx, this.panelButton(), 'MAIN MENU', { color: UI.green, selected: true });
+      return;
+    }
     if (this.paused) {
       ctx.fillStyle = 'rgba(8,10,24,0.7)';
       ctx.fillRect(0, 0, W, H);

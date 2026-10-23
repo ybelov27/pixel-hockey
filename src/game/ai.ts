@@ -12,6 +12,7 @@ const ZONE = RINK_L - BLUE_LINE; // attacking blue line in the attack frame (375
 /** Teammates of the human play at Pro level; the CPU uses the chosen difficulty. */
 function level(m: Match, s: Skater) {
   if (m.human < 0) return 2;
+  if (m.versus) return 1;
   return s.side === m.human ? 1 : m.cfg.difficulty;
 }
 
@@ -69,7 +70,7 @@ function receive(m: Match, s: Skater) {
   s.tx = pk.x + pk.vx * t;
   s.ty = pk.y + pk.vy * t;
   const a = m.ax(s.side, s.x);
-  if (!m.practice && a > 470 && Math.abs(s.y - CY) < 45 && s.oneTimer <= 0 && rng.next() < 0.02 + level(m, s) * 0.006) s.oneTimer = 0.5;
+  if (!m.practice && a > 470 && Math.abs(s.y - CY) < 45 && s.oneTimer <= 0 && rng.next() < 0.03 + level(m, s) * 0.01) s.oneTimer = 0.5;
 }
 
 function support(m: Match, s: Skater) {
@@ -159,11 +160,11 @@ function defend(m: Match, s: Skater, dt: number) {
     return;
   }
   const side = s.side;
-  const mates = m.onIce(side).filter((k) => k !== m.ctrl && k.down <= 0);
+  const mates = m.onIce(side).filter((k) => !m.isCtrl(k) && k.down <= 0);
   mates.sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y));
   const rank = mates.indexOf(s);
-  const ctrl = m.ctrl;
-  const humanPressing = !!ctrl && ctrl.side === side && Math.hypot(ctrl.x - c.x, ctrl.y - c.y) < 40;
+  const ctrl = m.ctrlOf(side);
+  const humanPressing = !!ctrl && Math.hypot(ctrl.x - c.x, ctrl.y - c.y) < 40;
   const gx = m.goalX(side);
   // how deep the carrier is in our end (0 = our goal line side, 600 = far end)
   const depth = m.ax(side, c.x);
@@ -205,10 +206,10 @@ function defend(m: Match, s: Skater, dt: number) {
 function loose(m: Match, s: Skater) {
   const pk = m.puck;
   const side = s.side;
-  const mates = m.onIce(side).filter((k) => k !== m.ctrl && k.down <= 0);
+  const mates = m.onIce(side).filter((k) => !m.isCtrl(k) && k.down <= 0);
   mates.sort((a, b) => Math.hypot(a.x - pk.x, a.y - pk.y) - Math.hypot(b.x - pk.x, b.y - pk.y));
   const rank = mates.indexOf(s);
-  const ctrlChasing = !!m.ctrl && m.ctrl.side === side;
+  const ctrlChasing = !!m.ctrlOf(side);
   const d = Math.hypot(s.x - pk.x, s.y - pk.y);
   if (rank === 0 || (rank === 1 && !ctrlChasing && d < 70)) {
     s.tx = pk.x + pk.vx * 0.25;
@@ -245,7 +246,9 @@ function carrier(m: Match, s: Skater, dt: number) {
 
   let shoot = -1;
   if (a > 390 && a < 562 && yOff < 25 + (562 - a) * 0.6) {
-    shoot = 1.25 - dG / 170;
+    // CPU attackers against a human shoot more readily as difficulty rises
+    const eager = m.human >= 0 && side !== m.human ? 0.1 + m.cfg.difficulty * 0.05 : 0;
+    shoot = 1.25 - dG / 170 + eager;
     for (const o of opp) if (distToSeg(o.x, o.y, s.x, s.y, gx, CY) < 7) shoot -= 0.35;
     if (pressure < 14) shoot += 0.15;
   }
