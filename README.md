@@ -52,4 +52,4 @@ Tech: TypeScript, Vite and Canvas 2D at a low internal resolution, scaled up by 
 
 ## Deploying
 
-`dist/` is a fully static site that you can host anywhere (GitHub Pages, Netlify, Vercel, Cloudflare Pages). The included workflow (`.github/workflows/deploy.yml`) publishes to **GitHub Pages** on every push to `main`. To turn it on, go to the repo's **Settings > Pages > Build and deployment > Source** and choose **GitHub Actions**. Home-screen install and offline mode require HTTPS, which all of these hosts provide.
+`dist/` is a fully static site that you can host anywhere (GitHub Pages, Netlify, Vercel, Cloudflare Pages). The included workflow (`.github/workflows/deploy.yml`) publishes to **GitHub Pages** on every push to `main` (or the current default branch). To turn it on, go to the repo's **Settings > Pages > Build and deployment > Source** and choose **GitHub Actions**. Home-screen install and offline mode require HTTPS, which all of these hosts provide.
