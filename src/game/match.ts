@@ -1467,7 +1467,8 @@ export class Match {
   saveChance(g: Goalie, shot: Shot, d: number) {
     let base = 0.915 + (g.p.goa - 80) * 0.007;
     const diff = this.cfg.difficulty;
-    if (this.human >= 0 && !this.versus) {
+    if (this.practice) base -= 0.12; // practice goalie is there to be beaten
+    else if (this.human >= 0 && !this.versus) {
       if (shot.side === this.human) base += [0.02, 0.07, 0.09, 0.11][diff];
       else base += [0.0, -0.04, -0.07, -0.1][diff];
     }

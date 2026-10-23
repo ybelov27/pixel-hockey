@@ -35,7 +35,9 @@ describe('practice mode', () => {
         const d = Math.hypot(dx, dy) || 1;
         inp.move = { x: dx / d, y: dy / d };
         if (c.x > 450) {
-          inp.b = { pressed: shootFrames === 0, down: false, released: true };
+          // wind up past half power: a guaranteed bar down
+          const done = c.charge > m.chargeFull * 0.75;
+          inp.b = { pressed: shootFrames === 0, down: !done, released: done };
           shootFrames++;
         }
       } else {
