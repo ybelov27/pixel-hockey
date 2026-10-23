@@ -21,7 +21,7 @@ Research notes: *NHL '94* is remembered as pick-up-and-play. Reviewers say most 
    - **Faceoff help.** The faceoff timing window gets +0.12 s.
    - **Target reticle.** When the human carries the puck in the attacking half, a pulsing yellow target is drawn on the net corner where an assisted shot will go, so players always know a shot will be on net.
 2. **Auto-switch (setting, default ON).** On defense, control moves to the skater closest to the puck. It uses hysteresis: switch only if another skater is clearly closer (25% closer and at least 20 px) and at most every 0.35 s, so control never flickers.
-3. **Arcade rules by default.** New players start with offside OFF and icing OFF, on ROOKIE difficulty. Existing saves keep their choices, migrated once with a settings version. All rules stay toggleable.
+3. **Arcade rules by default.** New players start with icing OFF, on ROOKIE difficulty (offside was later removed entirely). Existing saves keep their choices, migrated once with a settings version. All rules stay toggleable.
 4. **Bigger touch targets.** SHOOT radius 22, PASS 17, DEKE 14, plus a bigger floating joystick.
 5. **Contextual first-time tips.** These show once per install and are stored in `localStorage`:
    - The first time you have the puck: "TAP SHOOT TO SHOOT - HOLD FOR A SLAPSHOT".
@@ -58,6 +58,8 @@ Research notes: **"bar down"** is slang for a goal where the puck hits the cross
    - A puck that crosses the goal line between the posts at crossbar height (within about 2 px below the bar) is a **BAR DOWN** goal: it plays a crossbar PING, shows a "BAR DOWN!" banner and appears on the jumbotron.
    - A puck just above the bar is a **CROSSBAR** hit: it pings and deflects back out with a "CROSSBAR!" pop.
    - A goal scored within 0.25 s of a post hit is **POST AND IN**.
+   - **Half-power rule (player request):** every slap shot the player charges past half power (the white tick on the power meter, which turns gold and reads "BAR DOWN!") is a guaranteed bar-down goal. It can't be saved or blocked and threads past the posts. CPU shots are not affected. (`HALF_POWER` in `src/game/match.ts`.)
+   - **Offside removed (player request):** there is no offside rule or setting.
    - **Bar-down rate (player request):** 80% of goals go in bar down, and a puck that clips the crossbar drops in 80% of the time. It is set by `BAR_DOWN_CHANCE` in `src/game/match.ts`.
    - **Bar-down sound:** a struck-steel "ting" built from a sharp click plus inharmonic, slightly beating partials at the vibration ratios of a metal bar (1 : 2.76 : 5.4 : 8.93), then the snap of the net and the crowd erupting. The goal horn comes in a beat later so the ting is heard first.
 2. **Goal tags** appear in the goal banner and the scoring log: BAR DOWN, POST AND IN, TOP SHELF, FIVE HOLE, ONE-TIMER, REBOUND, BREAKAWAY, SLAPSHOT, POWER PLAY GOAL, SHORTY.

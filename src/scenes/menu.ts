@@ -101,7 +101,6 @@ function matchCfg(home: Team, away: Team, human: 0 | 1, kind: 'exhibition' | 'se
     home, away, human, kind,
     periodSec: settings.periodMin * 60,
     difficulty: settings.difficulty,
-    offside: settings.offside,
     icing: settings.icing,
     penalties: settings.penalties,
     assist: settings.assist,
@@ -134,7 +133,7 @@ export function practiceGame() {
       // a random opponent supplies the practice goalie
       const others = TEAMS.filter((t) => t.abbr !== you.abbr);
       const opp = others[Math.floor(Math.random() * others.length)];
-      const cfg = { ...matchCfg(you, opp, 0, 'practice'), offside: false, icing: false, penalties: false };
+      const cfg = { ...matchCfg(you, opp, 0, 'practice'), icing: false, penalties: false };
       scenes.go(new GameScene(cfg, back, back));
     }, back),
   );

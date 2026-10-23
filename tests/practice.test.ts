@@ -8,7 +8,7 @@ const btn = () => ({ pressed: false, down: false, released: false });
 function practice() {
   return new Match({
     home: TEAMS[0], away: TEAMS[5], human: 0, periodSec: 180, difficulty: 0,
-    offside: false, icing: false, penalties: false, kind: 'practice', assist: true, autoSwitch: true,
+    icing: false, penalties: false, kind: 'practice', assist: true, autoSwitch: true,
   });
 }
 

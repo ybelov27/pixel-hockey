@@ -8,7 +8,7 @@ import { rng } from '../src/core/rng';
 function shotAtLeftNet(z: number) {
   const m = new Match({
     home: TEAMS[0], away: TEAMS[1], human: -1, periodSec: 120, difficulty: 1,
-    offside: false, icing: false, penalties: false, kind: 'exhibition',
+    icing: false, penalties: false, kind: 'exhibition',
   });
   m.state = 'play';
   m.goalies[0].active = false; // home defends the left net in period 1
@@ -68,17 +68,41 @@ describe('settings migration', () => {
   it('new players get arcade defaults with Easy Controls', () => {
     const s = migrateSettings(null);
     expect(s).toEqual(DEFAULT_SETTINGS);
-    expect(s.offside).toBe(false);
     expect(s.assist).toBe(true);
     expect(s.difficulty).toBe(0);
   });
 
   it('existing players keep their rules but get the new assists once', () => {
-    const s = migrateSettings({ offside: true, icing: true, difficulty: 2 });
-    expect(s.offside).toBe(true);
+    const s = migrateSettings({ icing: true, difficulty: 2 });
+    expect(s.icing).toBe(true);
     expect(s.difficulty).toBe(2);
     expect(s.assist).toBe(true);
     expect(s.v).toBe(DEFAULT_SETTINGS.v);
     expect(migrateSettings({ ...s, assist: false }).assist).toBe(false);
+  });
+});
+
+describe('half-power bar down', () => {
+  it('every player slap shot past half power goes in bar down, even with defenders and a goalie', () => {
+    let goals = 0;
+    const n = 25;
+    for (let i = 0; i < n; i++) {
+      const m = new Match({
+        home: TEAMS[i % 32], away: TEAMS[(i + 9) % 32], human: 0, periodSec: 180, difficulty: 3,
+        icing: false, penalties: false, kind: 'exhibition', assist: false,
+      });
+      m.state = 'play';
+      const c = m.skaters[0][0];
+      c.x = 330 + (i * 37) % 200; // anywhere in the attacking half (home shoots right in period 1)
+      c.y = 30 + (i * 53) % 195;
+      m.ctrl = c;
+      m.puck.x = c.x + 6;
+      m.puck.y = c.y;
+      m.puck.owner = c;
+      m.doShoot(c, 0.55 + (i % 5) * 0.1, null, false);
+      for (let t = 0; t < 240 && m.state === 'play'; t++) m.update(1 / 60, null);
+      if (m.score[0] === 1 && m.goals[0].tag.includes('BAR DOWN')) goals++;
+    }
+    expect(goals).toBe(n);
   });
 });

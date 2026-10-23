@@ -110,7 +110,6 @@ function support(m: Match, s: Skater) {
       y = inZone ? RINK_W * 0.78 : RINK_W * 0.67;
       break;
   }
-  if (!inZone) a = Math.min(a, ZONE - 6);
   a = clamp(a, 45, 560);
   s.tx = m.wx(side, a);
   s.ty = y;
@@ -238,7 +237,6 @@ function carrier(m: Match, s: Skater, dt: number) {
   for (const t of m.onIce(side)) {
     if (t === s || t.down > 0) continue;
     const ta = m.ax(side, t.x);
-    if (a < ZONE && ta > ZONE) continue;
     let lane = Infinity;
     for (const o of opp) lane = Math.min(lane, distToSeg(o.x, o.y, s.x, s.y, t.x, t.y));
     if (lane < 9) continue;
@@ -303,8 +301,6 @@ function carryTarget(m: Match, s: Skater, a: number, opp: Skater[]) {
   if (a < ZONE) {
     ta = Math.min(a + 90, 460);
     ty = s.y < CY ? CY - 45 : CY + 45;
-    const offside = m.onIce(side).some((t) => t !== s && m.ax(side, t.x) > ZONE + 3);
-    if (offside && a > ZONE - 45) ta = a - 12;
   } else if (a > 530) {
     ta = 480;
     ty = CY + (s.y < CY ? -10 : 10);

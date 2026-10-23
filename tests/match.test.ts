@@ -19,7 +19,7 @@ describe('match simulation (CPU vs CPU)', () => {
     for (let g = 0; g < 4; g++) {
       const m = new Match({
         home: TEAMS[g], away: TEAMS[31 - g], human: -1, periodSec: 120, difficulty: 1,
-        offside: true, icing: true, penalties: true, kind: 'exhibition',
+        icing: true, penalties: true, kind: 'exhibition',
       });
       playOut(m);
       expect(m.state).toBe('final');
@@ -37,7 +37,7 @@ describe('match simulation (CPU vs CPU)', () => {
   it('decides a shootout', () => {
     const m = new Match({
       home: TEAMS[3], away: TEAMS[5], human: -1, periodSec: 120, difficulty: 1,
-      offside: true, icing: true, penalties: false, kind: 'shootout',
+      icing: true, penalties: false, kind: 'shootout',
     });
     playOut(m, 400);
     expect(m.state).toBe('final');

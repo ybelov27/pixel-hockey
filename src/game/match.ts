@@ -4,8 +4,8 @@ import { clamp, distToSeg, rotateTowards } from '../core/math';
 import { rng } from '../core/rng';
 import type { GPose } from '../render/sprites';
 import {
-  BLUE_LINE, CENTER_DOT, CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W,
-  constrainToRink, endDot, neutralDot, type Dot,
+  CENTER_DOT, CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W,
+  constrainToRink, endDot, type Dot,
 } from './rink';
 import { aiThink, goalieThink } from './ai';
 
@@ -20,7 +20,6 @@ export interface MatchConfig {
   human: -1 | 0 | 1;
   periodSec: number;
   difficulty: number;
-  offside: boolean;
   icing: boolean;
   penalties: boolean;
   kind: MatchKind;
@@ -106,6 +105,8 @@ export interface Shot {
   deke: boolean;
   slap: boolean;
   breakaway: boolean;
+  /** Guaranteed bar-down shot: no saves or blocks. */
+  barDown: boolean;
   t: number;
   resolved: boolean;
 }
@@ -210,6 +211,8 @@ export interface Shootout {
 
 /** Share of goals that go in off the crossbar, and of crossbar clips that drop in. */
 export const BAR_DOWN_CHANCE = 0.8;
+/** Slap shot power (0-1) above which the player's shot is a guaranteed bar down. */
+export const HALF_POWER = 0.5;
 const PUCK_FRICTION = 0.55;
 const GRAV = 420;
 
@@ -252,7 +255,6 @@ export class Match {
   private lastSave = -99;
   private finalPending = false;
   private shootoutPending = false;
-  private prevPx = CX;
   private switchT = 0;
   private lastPost = -99;
   private pendingTag = '';
@@ -477,7 +479,6 @@ export class Match {
     pk.shot = null;
     pk.passTarget = null;
     pk.ice = null;
-    this.prevPx = pk.x;
     this.touches = [];
   }
 
@@ -785,11 +786,14 @@ export class Match {
     const g = this.goalies[1 - side];
     const assist = this.assisted(c);
     if (aimY === null) aimY = this.openCorner(side);
+    // the player's slap shots charged past half power always ring in bar down
+    const barDown = this.human >= 0 && c === this.ctrl && power > HALF_POWER && this.ax(side, pk.x) < RINK_L - GOAL_LINE - 4;
+    if (barDown) aimY = clamp(aimY, CY - GOAL_HW + 3.5, CY + GOAL_HW - 3.5);
     let speed = power > 0 ? 400 + power * 150 + c.p.sht * 0.6 : 330 + c.p.sht * 0.9;
     if (oneTimer) speed += 40;
     let sd = (100 - c.p.sht) * 0.0022 + power * 0.025 + (c.p.stamina < 30 ? 0.03 : 0) + (oneTimer ? 0.02 : 0);
     if (assist) sd *= 0.4;
-    const ang = Math.atan2(aimY - pk.y, gx - pk.x) + rng.gauss() * sd * 0.6;
+    const ang = Math.atan2(aimY - pk.y, gx - pk.x) + (barDown ? 0 : rng.gauss() * sd * 0.6);
     const breakaway = this.onIce((1 - side) as Side).every((o) => this.ax(side, o.x) < this.ax(side, c.x) - 4) && this.ax(side, c.x) > CX;
     this.release(c);
     pk.vx = Math.cos(ang) * speed;
@@ -798,17 +802,21 @@ export class Match {
     const r = rng.next();
     const zAim = r < 0.42 ? 1 + rng.next() * 3 : r < 0.78 ? 4 + rng.next() * 5 : GOAL_H - 5 + rng.next() * 6.5;
     const tFly = Math.max(0.05, Math.abs(gx - pk.x) / Math.max(1, Math.abs(pk.vx)));
-    pk.vz = Math.max(0, (zAim + 0.5 * GRAV * tFly * tFly) / tFly + rng.gauss() * sd * (assist ? 25 : 60));
-    pk.vz = Math.min(pk.vz, 260);
+    if (barDown) {
+      pk.vz = (GOAL_H - 1 + 0.5 * GRAV * tFly * tFly) / tFly;
+    } else {
+      pk.vz = Math.max(0, (zAim + 0.5 * GRAV * tFly * tFly) / tFly + rng.gauss() * sd * (assist ? 25 : 60));
+      pk.vz = Math.min(pk.vz, 260);
+    }
     pk.passTarget = null;
     // will it be on net?
     const t = Math.abs(gx - pk.x) / Math.max(1, Math.abs(pk.vx));
     const yAt = pk.y + pk.vy * t;
     const zAt = Math.max(0, pk.vz * t - 0.5 * GRAV * t * t);
-    const onTarget = Math.abs(yAt - CY) < GOAL_HW - 0.5 && zAt < GOAL_H && Math.sign(pk.vx) === Math.sign(gx - pk.x);
+    const onTarget = barDown || (Math.abs(yAt - CY) < GOAL_HW - 0.5 && zAt < GOAL_H && Math.sign(pk.vx) === Math.sign(gx - pk.x));
     pk.shot = {
       side, shooter: c, sx: pk.x, sy: pk.y, speed, onTarget, oneTimer,
-      rebound: this.time - this.lastSave < 1.3, deke: c.deke > 0 || c.dekeCD > 0.8, slap: power > 0, breakaway, t: this.time, resolved: false,
+      rebound: this.time - this.lastSave < 1.3, deke: c.deke > 0 || c.dekeCD > 0.8, slap: power > 0, breakaway, barDown, t: this.time, resolved: false,
     };
     if (power > 0 && speed > 470) this.emit('mph', pk.x, pk.y, side, Math.round(speed * 0.18));
     c.follow = 0.25;
@@ -1078,7 +1086,6 @@ export class Match {
 
   private updatePuck(dt: number) {
     const pk = this.puck;
-    this.prevPx = pk.x;
     if (pk.owner) {
       const k = pk.owner;
       const wob = Math.sin(this.time * 14) * 1.2;
@@ -1156,8 +1163,8 @@ export class Match {
   private netPhysics(gl: number, px: number, py: number) {
     const pk = this.puck;
     const rs = gl < CX ? 1 : -1;
-    // posts
-    for (const sy of [-1, 1]) {
+    // posts (a guaranteed bar down threads past them)
+    for (const sy of pk.shot?.barDown ? [] : [-1, 1]) {
       const postY = CY + sy * GOAL_HW;
       const dx = pk.x - gl;
       const dy = pk.y - postY;
@@ -1248,6 +1255,15 @@ export class Match {
     const rs = this.dir[g.side];
     const plane = g.x;
     const crossing = (px - plane) * rs > 0 && (pk.x - plane) * rs <= 0;
+    if (pk.shot?.barDown) {
+      // a guaranteed bar down beats the goalie, who can only flail at it
+      if (crossing && pk.shot.side !== g.side) {
+        pk.shot.resolved = true;
+        g.pose = 'glove';
+        g.poseT = 0.5;
+      }
+      return false;
+    }
     if (crossing && pk.z < GOAL_H + 5) {
       const t = (px - plane) / (px - pk.x || 1);
       const yC = py + (pk.y - py) * t;
@@ -1383,7 +1399,7 @@ export class Match {
 
   private pickups() {
     const pk = this.puck;
-    if (pk.owner || pk.gOwner || pk.z > 10) return;
+    if (pk.owner || pk.gOwner || pk.z > 10 || pk.shot?.barDown) return;
     let best: Skater | null = null;
     let bd = Infinity;
     for (const k of this.all()) {
@@ -1426,21 +1442,6 @@ export class Match {
   // ---------- rules ----------
   private rules() {
     const pk = this.puck;
-    for (const s of [0, 1] as Side[]) {
-      const prevA = this.ax(s, this.prevPx);
-      const curA = this.ax(s, pk.x);
-      const blue = RINK_L - BLUE_LINE;
-      if (this.cfg.offside && prevA < blue && curA >= blue) {
-        const controlling = pk.owner ? pk.owner.side === s : pk.lastSide === s;
-        if (controlling) {
-          const off = this.onIce(s).find((k) => k !== pk.owner && this.ax(s, k.x) > blue + 3);
-          if (off) {
-            this.whistle('OFFSIDE', neutralDot(this.wx(s, RINK_L - (BLUE_LINE + 15)) < CX, pk.y < CY));
-            return;
-          }
-        }
-      }
-    }
     if (this.cfg.icing && pk.ice && !pk.owner && !pk.gOwner) {
       const s = pk.ice.side;
       if (this.ax(s, pk.x) > RINK_L - GOAL_LINE + 1 && pk.ice.ax < CX && !this.shorthanded(s)) {
@@ -1516,7 +1517,7 @@ export class Match {
     }
     this.score[side]++;
     this.shots[side]++;
-    const pp = this.shorthanded((1 - side) as Side);
+    const pp = !this.practice && this.shorthanded((1 - side) as Side);
     // scorer + assists: most recent touches by the scoring side
     let scorer: Skater | null = null;
     const assists: PlayerInfo[] = [];
@@ -1573,6 +1574,7 @@ export class Match {
       else if (sh.breakaway) tags.push('BREAKAWAY');
       else if (sh.slap) tags.push('SLAPSHOT');
     }
+    if (this.practice) return tags.slice(0, 2).join(' + ');
     if (this.shorthanded(side)) tags.push('SHORTY');
     else if (pp) tags.push('PP GOAL');
     return tags.slice(0, 2).join(' + ');

@@ -36,7 +36,6 @@ export function remove(key: string) {
 export interface Settings {
   periodMin: number;
   difficulty: number; // 0 Rookie, 1 Pro, 2 All-Star, 3 Legend
-  offside: boolean;
   icing: boolean;
   penalties: boolean;
   sound: boolean;
@@ -52,7 +51,6 @@ export const SETTINGS_VERSION = 2;
 export const DEFAULT_SETTINGS: Settings = {
   periodMin: 3,
   difficulty: 0,
-  offside: false,
   icing: false,
   penalties: true,
   sound: true,

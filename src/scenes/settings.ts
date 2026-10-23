@@ -17,7 +17,6 @@ export class SettingsScene implements Scene {
     { label: 'DIFFICULTY', value: () => DIFFICULTY_NAMES[settings.difficulty], change: (d) => { settings.difficulty = (settings.difficulty + d + 4) % 4; } },
     { label: 'EASY CONTROLS', value: () => (settings.assist ? 'ON' : 'OFF'), change: () => { settings.assist = !settings.assist; } },
     { label: 'AUTO SWITCH', value: () => (settings.autoSwitch ? 'ON' : 'OFF'), change: () => { settings.autoSwitch = !settings.autoSwitch; } },
-    { label: 'OFFSIDE', value: () => (settings.offside ? 'ON' : 'OFF'), change: () => { settings.offside = !settings.offside; } },
     { label: 'ICING', value: () => (settings.icing ? 'ON' : 'OFF'), change: () => { settings.icing = !settings.icing; } },
     { label: 'PENALTIES', value: () => (settings.penalties ? 'ON' : 'OFF'), change: () => { settings.penalties = !settings.penalties; } },
     { label: 'SOUND', value: () => (settings.sound ? 'ON' : 'OFF'), change: () => { settings.sound = !settings.sound; if (!settings.sound) audio.music(false); } },

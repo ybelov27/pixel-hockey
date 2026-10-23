@@ -12,7 +12,7 @@ function fresh() {
   if (b >= a) b++;
   const m = new Match({
     home: TEAMS[a], away: TEAMS[b], human: -1, periodSec: 600, difficulty: 2,
-    offside: true, icing: true, penalties: false, kind: 'attract',
+    icing: true, penalties: false, kind: 'attract',
   });
   cur = { m, r: new GameRenderer(m) };
 }

@@ -1,4 +1,4 @@
-import type { Match, MatchEvent, Side, SkSnap, Snap } from '../game/match';
+import { HALF_POWER, type Match, type MatchEvent, type Side, type SkSnap, type Snap } from '../game/match';
 import {
   CX, CY, GOAL_DEPTH, GOAL_H, GOAL_HW, GOAL_LINE, RINK_L, RINK_W, WORLD_PX_H, WORLD_PX_W, YS, projX, projY,
 } from '../game/rink';
@@ -380,8 +380,15 @@ export class GameRenderer {
       ctx.fillRect(px - 1, py - 25 + bob, 3, 1);
       ctx.fillRect(px, py - 24 + bob, 1, 1);
       if (s.charge > 0.05) {
-        const v = Math.min(1, s.charge / 0.9);
-        bar(ctx, px - 7, py - 31, 15, 3, v, v > 0.8 ? UI.red : v > 0.3 ? UI.orange : UI.yellow);
+        // same power curve as the engine; past the halfway tick it is a guaranteed bar down
+        const full = this.m.chargeFull;
+        const v = Math.max(0, Math.min(1, (s.charge - 0.18) / (full - 0.18)));
+        const bd = v > HALF_POWER;
+        const blink = Math.floor(performance.now() / 90) % 2 === 0;
+        bar(ctx, px - 10, py - 32, 21, 4, v, bd ? (blink ? '#ffd23f' : '#fff6c8') : v > 0 ? UI.orange : '#9aa3d6');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - 10 + Math.round(21 * HALF_POWER), py - 33, 1, 6);
+        if (bd) text(ctx, 'BAR DOWN!', px, py - 42, { color: '#ffd23f', align: 'center', outline: '#12121c', shadow: null });
       }
     }
   }
