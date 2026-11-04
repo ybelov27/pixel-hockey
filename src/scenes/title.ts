@@ -5,6 +5,7 @@ import { text } from '../render/font';
 import { attractDraw, attractStep } from './attract';
 import { scenes, type Scene } from './scene';
 import { MainMenu } from './menu';
+import { consumeInvite, joinFromInvite } from './online';
 
 export function drawLogo(ctx: CanvasRenderingContext2D, cx: number, y: number, scale: number) {
   const t = performance.now() / 1000;
@@ -29,7 +30,9 @@ export class TitleScene implements Scene {
       audio.unlock();
       audio.sfx('select');
       audio.music(true);
-      scenes.go(new MainMenu());
+      const invite = consumeInvite();
+      if (invite) joinFromInvite(invite);
+      else scenes.go(new MainMenu());
     }
   }
 
@@ -42,6 +45,9 @@ export class TitleScene implements Scene {
     // stick-and-puck flair aligned to the logo, centered
     drawLogo(ctx, Math.round(W / 2), y, scale);
     text(ctx, '32 TEAMS - SEASONS - PLAYOFFS - SHOOTOUTS', W / 2, y + logoH + 14, { color: '#bfe3ff', align: 'center' });
+    if (new URLSearchParams(location.search).has('join')) {
+      text(ctx, "YOU'VE BEEN INVITED TO AN ONLINE MATCH!", W / 2, H * 0.7, { color: '#9be7ff', align: 'center', outline: '#12121c', shadow: null });
+    }
     if (Math.floor(this.t * 2) % 2 === 0) {
       text(ctx, input.touchMode ? 'TAP TO START' : 'PRESS ENTER OR TAP TO START', W / 2, H * 0.78, { color: '#ffd23f', align: 'center', outline: '#12121c', shadow: null });
     }

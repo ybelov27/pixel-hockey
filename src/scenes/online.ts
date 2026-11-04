@@ -4,9 +4,9 @@ import { audio } from '../core/audio';
 import { settings } from '../core/storage';
 import { teamByAbbr, type Team } from '../data/teams';
 import type { MatchConfig } from '../game/match';
-import { CODE_ALPHABET, CODE_LEN, NET_VERSION, NetLink, type NetMessage } from '../net/net';
+import { CODE_ALPHABET, CODE_LEN, NET_VERSION, NetLink, isRoomCode, type NetMessage } from '../net/net';
 import { text } from '../render/font';
-import { button, chunky, drawCrest, header, Menu, menuBg, panel, UI, wrapText, type Rect } from '../render/ui';
+import { button, chunky, header, Menu, menuBg, panel, UI, wrapText, type Rect } from '../render/ui';
 import { scenes, type Scene } from './scene';
 import { MainMenu } from './menu';
 import { TeamSelectScene } from './teamSelect';
@@ -14,6 +14,25 @@ import { GameScene } from './game';
 import { ResultsScene } from './results';
 
 const toMenu = () => scenes.go(new MainMenu());
+
+/** A room code from an invite link (?join=CODE), used once and then removed from the address bar. */
+export function consumeInvite(): string | null {
+  try {
+    const url = new URL(location.href);
+    const code = (url.searchParams.get('join') || '').toUpperCase();
+    if (!code) return null;
+    url.searchParams.delete('join');
+    history.replaceState(null, '', url.toString());
+    return isRoomCode(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Opening an invite link: pick a team, then join the room straight away. */
+export function joinFromInvite(code: string) {
+  scenes.go(new TeamSelectScene(`JOIN ROOM ${code}: YOUR TEAM`, null, (t) => scenes.go(new JoinScene(t, code)), toMenu));
+}
 
 function backTapped() {
   return input.back.pressed || input.taps.some((t) => t.x < 34 + display.safe.l && t.y < 20 + display.safe.t);
@@ -108,7 +127,47 @@ export class HostLobbyScene implements Scene {
     scenes.go(new GameScene(onlineCfg(start), (mm) => scenes.go(new ResultsScene(mm, back, 0)), back, { link: this.link, role: 'host' }));
   }
 
-  update() {
+  private shareMsg = '';
+  private shareT = 0;
+
+  private shareRect(): Rect {
+    const { W, H } = display;
+    return { x: Math.round(W / 2 - 70), y: Math.round(H * 0.45) + 44, w: 140, h: 22 };
+  }
+
+  /** Send the invite link with the phone's share sheet, or copy it. */
+  private async share() {
+    const url = this.link.inviteUrl();
+    const textMsg = `Play me in Pixel Hockey! Room ${this.link.code}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Pixel Hockey', text: textMsg, url });
+        this.flash('INVITE SENT - WAITING HERE');
+        return;
+      }
+    } catch {
+      /* cancelled or unsupported: fall back to copying */
+    }
+    try {
+      await navigator.clipboard.writeText(`${textMsg}: ${url}`);
+      this.flash('INVITE LINK COPIED!');
+    } catch {
+      this.flash(`SHARE THIS CODE: ${this.link.code}`);
+    }
+  }
+
+  private flash(msg: string) {
+    this.shareMsg = msg;
+    this.shareT = 3;
+  }
+
+  update(dt: number) {
+    this.shareT = Math.max(0, this.shareT - dt);
+    const r = this.shareRect();
+    if (this.link.code && !this.link.error && (input.tapIn(r.x, r.y, r.w, r.h) || input.confirm.pressed)) {
+      audio.sfx('select');
+      void this.share();
+    }
     if (backTapped()) {
       this.link.close();
       scenes.go(new OnlineMenuScene());
@@ -137,8 +196,10 @@ export class HostLobbyScene implements Scene {
     }
     const dots = '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3));
     text(ctx, this.link.status.replace('...', '') + dots, W / 2, cy + 18, { color: UI.yellow, align: 'center' });
-    text(ctx, 'SEND THIS CODE TO YOUR FRIEND. YOU ARE THE HOME TEAM.', W / 2, cy + 32, { color: UI.dim, align: 'center', shadow: null });
-    drawCrest(ctx, this.team, W / 2, H - safe.b - 26, 1);
+    text(ctx, 'SEND YOUR FRIEND THE INVITE OR THE CODE. YOU ARE HOME.', W / 2, cy + 30, { color: UI.dim, align: 'center', shadow: null });
+    button(ctx, this.shareRect(), 'SHARE INVITE', { color: '#7209b7', selected: true });
+    if (this.shareT > 0) text(ctx, this.shareMsg, W / 2, this.shareRect().y + 27, { color: UI.green, align: 'center' });
+    else text(ctx, 'IT IS OK TO SWITCH APPS - THE ROOM STAYS OPEN', W / 2, this.shareRect().y + 27, { color: UI.dim, align: 'center', shadow: null });
   }
 }
 
@@ -150,7 +211,15 @@ export class JoinScene implements Scene {
   private error = '';
   private sel = 0;
 
-  constructor(private team: Team) {}
+  constructor(
+    private team: Team,
+    preset = '',
+  ) {
+    if (preset) {
+      this.code = preset;
+      this.join();
+    }
+  }
 
   private keyRects() {
     const { W, H } = display;

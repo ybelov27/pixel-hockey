@@ -210,7 +210,8 @@ export class GameScene implements Scene {
       if (this.net) {
         this.pendingEv.push(...m.events);
         mergeSounds(this.pendingSnd);
-        if (++this.tickN % 2 === 0) {
+        // skip a frame rather than queue it when the connection is falling behind
+        if (++this.tickN % 2 === 0 && this.net.link.backlog() < 48000) {
           this.net.link.send(encodeState(m, this.pendingEv, this.pendingSnd, this.sentGoals) as unknown as NetMessage);
           this.sentGoals = m.goals.length;
           this.pendingEv = [];

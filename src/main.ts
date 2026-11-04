@@ -66,7 +66,8 @@ function boot() {
     present();
   };
   requestAnimationFrame(frame);
-  if (import.meta.env.DEV) (window as unknown as { __ph: unknown }).__ph = { scenes };
+  // test hook: always in dev, and in production only with ?debug in the address
+  if (import.meta.env.DEV || new URLSearchParams(location.search).has('debug')) (window as unknown as { __ph: unknown }).__ph = { scenes };
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
